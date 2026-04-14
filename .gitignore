@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+.pytest_cache/
+dist/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp / generated
+.tmp/
+.claude/reviews/
+.claude/settings.local.json
