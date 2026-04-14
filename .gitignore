@@ -25,3 +25,4 @@ Thumbs.db
 .tmp/
 .claude/reviews/
 .claude/settings.local.json
+frontend/tsconfig.tsbuildinfo
