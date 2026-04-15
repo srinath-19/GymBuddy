@@ -1,17 +1,38 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import VoiceInput from "@/components/VoiceInput";
 import { getWorkouts, logWorkout, WorkoutLogResponse } from "@/lib/api";
+import { createClient } from "@/lib/supabase/client";
 
 type UIState = "idle" | "submitting" | "error";
 
 export default function HomePage() {
+  const router = useRouter();
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<WorkoutLogResponse[]>([]);
   const [uiState, setUiState] = useState<UIState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastLogged, setLastLogged] = useState<WorkoutLogResponse | null>(null);
   const [historyError, setHistoryError] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace("/login");
+      } else {
+        setUserEmail(data.session.user.email ?? null);
+      }
+    });
+  }, [router]);
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
 
   const loadWorkouts = useCallback(async () => {
     try {
@@ -50,14 +71,41 @@ export default function HomePage() {
 
   return (
     <main style={{ maxWidth: "680px", margin: "0 auto", padding: "2rem 1rem" }}>
-      <h1
-        style={{ fontSize: "1.75rem", fontWeight: 700, marginBottom: "0.25rem" }}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "0.25rem",
+        }}
       >
-        GymBuddy
-      </h1>
-      <p style={{ color: "#6b7280", marginTop: 0, marginBottom: "2rem" }}>
-        Speak or type your workout to log it instantly.
-      </p>
+        <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>
+          GymBuddy
+        </h1>
+        <button
+          onClick={handleSignOut}
+          style={{
+            fontSize: "0.875rem",
+            color: "#6b7280",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            padding: "0.25rem 0.5rem",
+          }}
+        >
+          Sign out
+        </button>
+      </div>
+      {userEmail && (
+        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: "2rem" }}>
+          {userEmail}
+        </p>
+      )}
+      {!userEmail && (
+        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: "2rem" }}>
+          Speak or type your workout to log it instantly.
+        </p>
+      )}
 
       <section aria-label="Log a workout" style={{ marginBottom: "2.5rem" }}>
         <VoiceInput

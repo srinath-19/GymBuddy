@@ -9,21 +9,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.workout import WorkoutLog, WorkoutLogResponse
 
 
-async def insert_workout(session: AsyncSession, parsed: WorkoutLog) -> WorkoutLogResponse:
+async def insert_workout(
+    session: AsyncSession, parsed: WorkoutLog, user_id: uuid.UUID
+) -> WorkoutLogResponse:
     now = datetime.now(timezone.utc)
     workout_id = uuid.uuid4()
 
     result = await session.execute(
         text("""
             INSERT INTO workout_logs
-                (id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at)
+                (id, user_id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at)
             VALUES
-                (:id, :exercise, :sets, :reps, :weight, :weight_unit, :notes, :logged_at, :created_at)
+                (:id, :user_id, :exercise, :sets, :reps, :weight, :weight_unit, :notes, :logged_at, :created_at)
             RETURNING
-                id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at
+                id, user_id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at
         """),
         {
             "id": workout_id,
+            "user_id": user_id,
             "exercise": parsed.exercise,
             "sets": parsed.sets,
             "reps": parsed.reps,
@@ -39,16 +42,17 @@ async def insert_workout(session: AsyncSession, parsed: WorkoutLog) -> WorkoutLo
 
 
 async def fetch_workouts(
-    session: AsyncSession, limit: int = 50
+    session: AsyncSession, user_id: uuid.UUID, limit: int = 50
 ) -> list[WorkoutLogResponse]:
     result = await session.execute(
         text("""
-            SELECT id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at
+            SELECT id, user_id, exercise, sets, reps, weight, weight_unit, notes, logged_at, created_at
             FROM workout_logs
+            WHERE user_id = :user_id
             ORDER BY logged_at DESC
             LIMIT :limit
         """),
-        {"limit": limit},
+        {"user_id": user_id, "limit": limit},
     )
     rows = result.mappings().all()
     return [WorkoutLogResponse(**row) for row in rows]
