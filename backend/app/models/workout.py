@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date as Date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -36,6 +36,16 @@ class WorkoutRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Muscle targeting models
+# ---------------------------------------------------------------------------
+class MuscleTargetResponse(BaseModel):
+    muscle_group: str
+    specific_muscles: list[str]
+    role: Literal["primary", "secondary"]
+    source: Literal["lookup", "ai_inferred"]
+
+
+# ---------------------------------------------------------------------------
 # API response models
 # ---------------------------------------------------------------------------
 class WorkoutLogResponse(BaseModel):
@@ -49,9 +59,54 @@ class WorkoutLogResponse(BaseModel):
     notes: str | None
     logged_at: datetime
     created_at: datetime
+    is_personal_record: bool = False
+    muscle_targets: list[MuscleTargetResponse] = []
+
+
+class ManualWorkoutRequest(BaseModel):
+    """Direct workout creation — bypasses AI agent."""
+
+    exercise: str = Field(min_length=1)
+    sets: int = Field(ge=1)
+    reps: int = Field(ge=1)
+    weight: float = Field(ge=0.0)
+    weight_unit: Literal["lbs", "kg"] = "lbs"
+    notes: str | None = None
+
+
+class WorkoutUpdateRequest(BaseModel):
+    """Partial update — only supplied fields are changed."""
+
+    exercise: str | None = None
+    sets: int | None = Field(default=None, ge=1)
+    reps: int | None = Field(default=None, ge=1)
+    weight: float | None = Field(default=None, ge=0.0)
+    weight_unit: Literal["lbs", "kg"] | None = None
+    notes: str | None = None
+
+
+class WorkoutSession(BaseModel):
+    """A declared workout session for a calendar day (e.g. 'chest day', 'push day')."""
+
+    id: UUID
+    user_id: UUID
+    date: Date
+    session_type: str
+    notes: str | None
+    created_at: datetime
+
+
+class AgentActionResponse(BaseModel):
+    """Returned by POST /api/v1/workouts for any agent action (log, delete, search, etc.)."""
+
+    action: Literal["logged", "deleted", "found", "updated", "none", "session_started"]
+    message: str
+    workout: WorkoutLogResponse | None = None        # populated when action="logged"/"updated"
+    workouts: list[WorkoutLogResponse] | None = None  # populated when action="found" or bulk delete
+    session: WorkoutSession | None = None            # populated when action="session_started"
 
 
 class APIResponse(BaseModel):
     success: bool
-    data: WorkoutLogResponse | list[WorkoutLogResponse] | None = None
+    data: AgentActionResponse | list[WorkoutLogResponse] | list[WorkoutSession] | WorkoutLogResponse | None = None
     error: str | None = None
