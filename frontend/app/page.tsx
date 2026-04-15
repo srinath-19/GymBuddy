@@ -10,6 +10,7 @@ type UIState = "idle" | "submitting" | "error";
 
 export default function HomePage() {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<WorkoutLogResponse[]>([]);
   const [uiState, setUiState] = useState<UIState>("idle");
@@ -18,15 +19,21 @@ export default function HomePage() {
   const [historyError, setHistoryError] = useState(false);
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        router.replace("/login");
-      } else {
-        setUserEmail(data.session.user.email ?? null);
-      }
-    });
+    // Middleware already blocks unauthenticated access, but confirm the session
+    // here so we have the user's email for display.
+    createClient()
+      .auth.getSession()
+      .then(({ data }) => {
+        if (!data.session) {
+          router.replace("/login");
+        } else {
+          setUserEmail(data.session.user.email ?? null);
+          setReady(true);
+        }
+      });
   }, [router]);
+
+  if (!ready) return null;
 
   const handleSignOut = async () => {
     const supabase = createClient();

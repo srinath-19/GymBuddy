@@ -24,15 +24,29 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session using getClaims() — never getSession() in server code
-  // (getSession reads the cookie without verifying the JWT signature)
-  await supabase.auth.getClaims();
+  // getClaims() verifies the JWT signature locally — never use getSession() in
+  // server code as it reads the cookie without signature verification.
+  const { data } = await supabase.auth.getClaims();
+  const isAuthenticated = data?.claims != null;
+
+  const { pathname } = request.nextUrl;
+  const isLoginPage = pathname === "/login";
+
+  // Unauthenticated user hitting a protected page → send to login
+  if (!isAuthenticated && !isLoginPage) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // Authenticated user hitting /login → send to app
+  if (isAuthenticated && isLoginPage) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
 
   return response;
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|login).*)",
-  ],
+  // Run on all routes except Next.js internals and static files.
+  // /login is included so the authenticated → "/" redirect works.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
