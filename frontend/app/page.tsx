@@ -33,14 +33,6 @@ export default function HomePage() {
       });
   }, [router]);
 
-  if (!ready) return null;
-
-  const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.replace("/login");
-  };
-
   const loadWorkouts = useCallback(async () => {
     try {
       const data = await getWorkouts();
@@ -52,8 +44,8 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    void loadWorkouts();
-  }, [loadWorkouts]);
+    if (ready) void loadWorkouts();
+  }, [ready, loadWorkouts]);
 
   const handleTranscript = useCallback(
     async (text: string) => {
@@ -75,6 +67,14 @@ export default function HomePage() {
     },
     [loadWorkouts]
   );
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
+
+  if (!ready) return null;
 
   return (
     <main style={{ maxWidth: "680px", margin: "0 auto", padding: "2rem 1rem" }}>
