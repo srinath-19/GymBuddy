@@ -40,6 +40,7 @@ class WorkoutRequest(BaseModel):
 # ---------------------------------------------------------------------------
 class WorkoutLogResponse(BaseModel):
     id: UUID
+    user_id: UUID | None
     exercise: str
     sets: int
     reps: int

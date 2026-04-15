@@ -69,6 +69,7 @@ async def create_tables() -> None:
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS workout_logs (
                 id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id     UUID,
                 exercise    VARCHAR(255) NOT NULL,
                 sets        INTEGER NOT NULL,
                 reps        INTEGER NOT NULL,
@@ -78,4 +79,9 @@ async def create_tables() -> None:
                 logged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """))
+        # Add user_id to existing deployments that predate auth
+        await conn.execute(text("""
+            ALTER TABLE workout_logs
+                ADD COLUMN IF NOT EXISTS user_id UUID
         """))

@@ -1,7 +1,10 @@
+import { createClient } from "./supabase/client";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export interface WorkoutLogResponse {
   id: string;
+  user_id: string | null;
   exercise: string;
   sets: number;
   reps: number;
@@ -18,12 +21,25 @@ interface APIResponse<T> {
   error: string | null;
 }
 
+async function getToken(): Promise<string> {
+  const supabase = createClient();
+  const { data } = await supabase.auth.getSession();
+  if (!data.session?.access_token) {
+    throw new Error("Not authenticated");
+  }
+  return data.session.access_token;
+}
+
 async function apiFetch<T>(
   path: string,
   init?: RequestInit
 ): Promise<APIResponse<T>> {
+  const token = await getToken();
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
     ...init,
   });
 
