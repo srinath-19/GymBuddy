@@ -12,8 +12,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
-
 load_dotenv()
 
 _raw_url: str = os.environ.get("DATABASE_URL", "")
@@ -24,19 +22,24 @@ if not _raw_url:
     )
 
 # Strip ?pgbouncer=true if present — that flag is Prisma-specific syntax.
-# asyncpg doesn't accept it as a connect() argument and will raise TypeError.
-# PgBouncer compatibility is configured below via connect_args instead.
 DATABASE_URL = _raw_url.replace("?pgbouncer=true", "").replace("&pgbouncer=true", "")
 
-# NullPool + statement_cache_size=0 is the correct asyncpg setup for PgBouncer
-# in transaction mode:
-#   - NullPool: disables SQLAlchemy's own connection pool so PgBouncer manages
-#     connections exclusively (avoids conflicts with transaction-level pooling).
-#   - statement_cache_size=0: tells asyncpg not to use server-side prepared
-#     statements, which PgBouncer in transaction mode does not support.
+# Pool settings for Supabase transaction pooler (PgBouncer, port 6543):
+#   - statement_cache_size=0: disables asyncpg server-side prepared statements,
+#     which PgBouncer transaction mode does not support.
+#   - pool_size/max_overflow: SQLAlchemy holds open connections to PgBouncer so
+#     each request reuses an existing connection instead of paying the full
+#     TCP + SSL + auth handshake cost (~500ms on hosted Supabase) every time.
+#   - pool_pre_ping: validates idle connections before use (handles Supabase
+#     idle-connection timeouts without crashing).
+#   - pool_recycle: proactively recycle connections every 5 min to stay ahead
+#     of Supabase's server-side idle timeout.
 engine = create_async_engine(
     DATABASE_URL,
-    poolclass=NullPool,
+    pool_size=5,
+    max_overflow=5,
+    pool_pre_ping=True,
+    pool_recycle=300,
     connect_args={"statement_cache_size": 0},
     echo=False,  # set True to log SQL queries during development
 )
@@ -84,4 +87,25 @@ async def create_tables() -> None:
         await conn.execute(text("""
             ALTER TABLE workout_logs
                 ADD COLUMN IF NOT EXISTS user_id UUID
+        """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS workout_muscle_targets (
+                id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workout_id       UUID NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
+                muscle_group     VARCHAR(100) NOT NULL,
+                specific_muscles TEXT[] NOT NULL DEFAULT '{}',
+                role             VARCHAR(20) NOT NULL DEFAULT 'primary',
+                source           VARCHAR(20) NOT NULL DEFAULT 'lookup'
+            )
+        """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS workout_sessions (
+                id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id      UUID NOT NULL,
+                date         DATE NOT NULL,
+                session_type TEXT NOT NULL,
+                notes        TEXT,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, date)
+            )
         """))

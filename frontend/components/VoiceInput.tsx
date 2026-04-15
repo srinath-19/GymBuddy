@@ -76,6 +76,7 @@ export default function VoiceInput({
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   // Keep a ref to the latest transcript so onend closure reads current value
   const transcriptRef = useRef("");
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     // Feature-detect on mount — useEffect is SSR-safe (client-only)
@@ -91,12 +92,24 @@ export default function VoiceInput({
     setInterimText("");
     transcriptRef.current = "";
 
+    const SILENCE_MS = 2000;
+
     const recognition: ISpeechRecognition = new API();
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
-    recognition.onstart = () => setState("listening");
+    const resetSilenceTimer = () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        recognition.stop();
+      }, SILENCE_MS);
+    };
+
+    recognition.onstart = () => {
+      setState("listening");
+      resetSilenceTimer();
+    };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const results = event.results;
@@ -107,9 +120,11 @@ export default function VoiceInput({
       const current = parts.join("");
       setInterimText(current);
       transcriptRef.current = current;
+      resetSilenceTimer();
     };
 
     recognition.onend = () => {
+      recognitionRef.current = null;
       setState("idle");
       const final = transcriptRef.current.trim();
       if (final) {
@@ -119,6 +134,7 @@ export default function VoiceInput({
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      recognitionRef.current = null;
       setState("idle");
       setError(`Speech error: ${event.error}`);
     };
@@ -128,6 +144,7 @@ export default function VoiceInput({
   }, [onTranscript]);
 
   const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     recognitionRef.current?.stop();
   }, []);
 
