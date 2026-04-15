@@ -46,7 +46,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Run on all routes except Next.js internals and static files.
-  // /login is included so the authenticated → "/" redirect works.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Run on all routes except Next.js internals, static files, and the OAuth
+  // callback route (which must run before a session exists).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|auth/callback).*)"],
 };
