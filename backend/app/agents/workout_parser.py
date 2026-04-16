@@ -58,6 +58,7 @@ async def log_workout(
     weight: float,
     weight_unit: str = "lbs",
     notes: str | None = None,
+    date_str: str | None = None,
 ) -> str:
     """
     Log a completed workout set to the database.
@@ -70,8 +71,18 @@ async def log_workout(
         weight: Weight lifted in the given unit. Use 0 for bodyweight exercises.
         weight_unit: "lbs" (default) or "kg".
         notes: Optional extra context (tempo, rest time, form cues). Omit if none.
+        date_str: ISO date "YYYY-MM-DD" of when the workout was done. Omit for today.
     """
     user_id = ctx.context.user_id
+
+    logged_at_dt: datetime | None = None
+    if date_str:
+        try:
+            target_date = Date.fromisoformat(date_str)
+            logged_at_dt = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
+        except ValueError:
+            return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
+
     parsed = WorkoutLog(
         exercise=exercise.strip().lower(),
         sets=sets,
@@ -81,7 +92,7 @@ async def log_workout(
         notes=notes,
     )
     async with get_session() as session:
-        record = await insert_workout(session, parsed, user_id)
+        record = await insert_workout(session, parsed, user_id, logged_at=logged_at_dt)
         is_pr = await check_personal_record(
             session, user_id, record.exercise, record.weight, record.id
         )
@@ -360,6 +371,47 @@ async def delete_exercise_today(
 
 
 @function_tool(strict_mode=False)
+async def get_workouts_for_date(
+    ctx: RunContextWrapper[GymContext],
+    date_str: str | None = None,
+) -> str:
+    """
+    Retrieve all workouts logged on a specific date, including their IDs.
+    Use this BEFORE update_workout_tool when the user wants to change a past workout.
+    Also use when the user asks "what did I do on Monday?" or "show me yesterday's workouts".
+    Do NOT use for "what did I do today?" — use get_today_workouts for that (it includes session context).
+
+    Args:
+        date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
+    """
+    today = datetime.now(timezone.utc).date()
+    if date_str:
+        try:
+            target_date = Date.fromisoformat(date_str)
+        except ValueError:
+            return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
+    else:
+        target_date = today
+
+    async with get_session() as db:
+        workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+
+    if not workouts:
+        label = "today" if target_date == today else str(target_date)
+        return f"No workouts found for {label}."
+
+    ctx.context.action = "found"
+    ctx.context.found_workouts = workouts
+
+    lines = [
+        f"{w.exercise} {w.sets}×{w.reps} @ {w.weight} {w.weight_unit} | id={w.id}"
+        for w in workouts
+    ]
+    label = "today" if target_date == today else str(target_date)
+    return f"Workouts on {label} ({len(workouts)}):\n" + "\n".join(lines)
+
+
+@function_tool(strict_mode=False)
 async def get_pr_for_exercise(
     ctx: RunContextWrapper[GymContext],
     exercise: str,
@@ -398,16 +450,20 @@ Keep responses concise, motivating, and actionable. Never give a wall of text.
 ## What you can do
 
 - **Log a workout** — user describes a completed exercise (e.g. "bench press 3x10 at 135 lbs")
+  → use `date_str` if the user says "I forgot to log yesterday's..." or names a past date
 - **Start a session** — user declares what type of workout today is
   → call start_workout_session with the session type
 - **Get today's workouts** — user asks what they did today or about muscle coverage
   → call get_today_workouts, then reason over the results to answer
+- **Get workouts for a past date** — user asks "what did I do yesterday?" or "show me last Monday's workout"
+  → call get_workouts_for_date with the ISO date; also call this BEFORE updating a past workout
 - **Delete the last workout** — user says "delete my last workout" or "undo that"
   → first call get_last_workout to get the ID, then call delete_workout with that ID
 - **Delete by exercise name** — user names a specific exercise to remove
   → call delete_exercise_today with the exercise name (and optional date)
-- **Edit / update a workout** — user wants to correct a field on a recent workout
-  → first call get_last_workout to get the ID, then call update_workout_tool with only the changed fields
+- **Edit / update a workout** — user wants to correct a field
+  - If "last workout": call get_last_workout → update_workout_tool
+  - If a past date: call get_workouts_for_date(date_str=...) → update_workout_tool with the matching ID
 - **Search history** — user asks about a specific exercise
   → call search_workouts_tool with the exercise name
 - **Find PR** — user asks "what's my PR on bench press?" or "what's my best squat weight?"
@@ -481,17 +537,21 @@ Your job:
 ## Examples
 - "bench press 3 sets of 10 at 135 pounds" → log_workout(exercise="bench press", sets=3, reps=10, weight=135)
 - "did 5x5 squats at 100kg" → log_workout(exercise="squat", sets=5, reps=5, weight=100, weight_unit="kg")
+- "I forgot to log yesterday's bench press 3x8 at 185 lbs" → log_workout(..., date_str="YYYY-MM-DD")
 - "starting chest day" / "today is push day" / "leg day today" → start_workout_session(session_type=...)
 - "what did I do today?" / "did I hit every muscle group?" → get_today_workouts() then analyze
 - "did I hit chest today?" → get_today_workouts() then check chest in covered list
+- "what did I do yesterday?" / "show me last Monday's workouts" → get_workouts_for_date(date_str=...)
 - "delete my last workout" → get_last_workout() → delete_workout(id=...)
 - "delete bench press from today" / "remove my squats" → delete_exercise_today(exercise=...)
+- "delete my squats from yesterday" → delete_exercise_today(exercise="squat", date_str="YYYY-MM-DD")
 - "show me my squat history" → search_workouts_tool(exercise="squat")
 - "what's my PR on bench press?" / "best squat weight?" / "have I hit 225 on deadlift?" → get_pr_for_exercise(exercise=...)
 - "what did I do last?" → get_last_workout()
 - "change my last workout to 4 sets" → get_last_workout() → update_workout_tool(workout_id=..., sets=4)
 - "my squat was actually 185 lbs" → get_last_workout() → update_workout_tool(workout_id=..., weight=185)
 - "fix the reps on my last bench press to 8" → get_last_workout() → update_workout_tool(workout_id=..., reps=8)
+- "change yesterday's squat weight to 225" → get_workouts_for_date(date_str=...) → update_workout_tool(workout_id=..., weight=225)
 
 Prefer delete_exercise_today over delete_workout when the user names an exercise rather than saying "last".
 
@@ -507,6 +567,7 @@ Always call a tool — never just respond with text when a tool applies.
         get_today_workouts,
         delete_exercise_today,
         get_pr_for_exercise,
+        get_workouts_for_date,
     ],
     model="gpt-5.4-mini",
 )

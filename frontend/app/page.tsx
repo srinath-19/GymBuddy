@@ -8,6 +8,7 @@ import {
   AgentActionResponse,
   deleteWorkout,
   getExpectedMuscles,
+  getRequiredMuscles,
   getSessions,
   getWorkouts,
   logWorkout,
@@ -162,11 +163,18 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
     const expectedMuscles = action.session
       ? getExpectedMuscles(action.session.session_type)
       : [];
+    const requiredMuscles = action.session
+      ? getRequiredMuscles(action.session.session_type)
+      : [];
     const hitMuscles = new Set<string>(
-      action.workouts.flatMap((w) => w.muscle_targets.map((t) => t.muscle_group))
+      action.workouts.flatMap((w) =>
+        w.muscle_targets.filter((t) => t.role === "primary").map((t) => t.muscle_group)
+      )
     );
     const coveredMuscles = expectedMuscles.filter((m) => hitMuscles.has(m));
     const missingMuscles = expectedMuscles.filter((m) => !hitMuscles.has(m));
+    const allRequiredCovered =
+      requiredMuscles.length > 0 && requiredMuscles.every((m) => hitMuscles.has(m));
 
     return (
       <div role="status" style={{
@@ -198,9 +206,9 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
             </span>
             {expectedMuscles.length > 0 && (
               <span style={{ fontSize: "0.75rem", color: "#6b7280" }}>
-                {missingMuscles.length === 0
-                  ? "All muscle groups covered!"
-                  : `${coveredMuscles.length}/${expectedMuscles.length} muscle groups covered`}
+                {allRequiredCovered
+                  ? "Session complete!"
+                  : `${requiredMuscles.filter((m) => hitMuscles.has(m)).length}/${requiredMuscles.length} main muscles covered`}
               </span>
             )}
           </div>
@@ -264,10 +272,14 @@ interface WorkoutFormValues {
   weight: string;
   weight_unit: "lbs" | "kg";
   notes: string;
+  date: string;  // "YYYY-MM-DD"
 }
 
 function blankForm(): WorkoutFormValues {
-  return { exercise: "", sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "" };
+  return {
+    exercise: "", sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "",
+    date: new Date().toISOString().slice(0, 10),
+  };
 }
 
 function fromWorkout(w: WorkoutLogResponse): WorkoutFormValues {
@@ -278,6 +290,7 @@ function fromWorkout(w: WorkoutLogResponse): WorkoutFormValues {
     weight: String(w.weight),
     weight_unit: w.weight_unit as "lbs" | "kg",
     notes: w.notes ?? "",
+    date: w.logged_at.slice(0, 10),
   };
 }
 
@@ -339,6 +352,13 @@ function WorkoutForm({ initial, onSave, onCancel, saving }: WorkoutFormProps) {
           <input style={inputStyle} placeholder="Notes (optional)" value={values.notes}
             onChange={(e) => set("notes", e.target.value)} />
         </div>
+        <input
+          style={inputStyle}
+          type="date"
+          value={values.date}
+          onChange={(e) => set("date", e.target.value)}
+          required
+        />
       </div>
       <div style={{ display: "flex", gap: "0.5rem" }}>
         <button
@@ -522,6 +542,9 @@ export default function HomePage() {
       setManualSaving(true);
 
       const tempId = `pending-${Date.now()}`;
+      const optimisticDate = values.date
+        ? `${values.date}T00:00:00.000Z`
+        : new Date().toISOString();
       const optimistic: WorkoutLogResponse = {
         id: tempId,
         user_id: null,
@@ -531,7 +554,7 @@ export default function HomePage() {
         weight: parseFloat(values.weight),
         weight_unit: values.weight_unit,
         notes: values.notes.trim() || null,
-        logged_at: new Date().toISOString(),
+        logged_at: optimisticDate,
         created_at: new Date().toISOString(),
         is_personal_record: false,
         muscle_targets: [],
@@ -545,6 +568,7 @@ export default function HomePage() {
         weight: parseFloat(values.weight),
         weight_unit: values.weight_unit,
         notes: values.notes.trim() || undefined,
+        logged_at: values.date || undefined,
       };
       try {
         await addWorkoutManually(payload);

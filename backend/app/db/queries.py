@@ -76,10 +76,14 @@ _WORKOUT_SELECT = """
 # ---------------------------------------------------------------------------
 
 async def insert_workout(
-    session: AsyncSession, parsed: WorkoutLog, user_id: uuid.UUID
+    session: AsyncSession,
+    parsed: WorkoutLog,
+    user_id: uuid.UUID,
+    logged_at: datetime | None = None,
 ) -> WorkoutLogResponse:
     now = datetime.now(timezone.utc)
     workout_id = uuid.uuid4()
+    effective_logged_at = logged_at if logged_at is not None else now
 
     result = await session.execute(
         text("""
@@ -99,7 +103,7 @@ async def insert_workout(
             "weight": parsed.weight,
             "weight_unit": parsed.weight_unit,
             "notes": parsed.notes,
-            "logged_at": now,
+            "logged_at": effective_logged_at,
             "created_at": now,
         },
     )

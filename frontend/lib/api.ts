@@ -64,6 +64,41 @@ export function getExpectedMuscles(sessionType: string): string[] {
   return SESSION_MUSCLE_MAP[sessionType.trim().toLowerCase()] ?? [];
 }
 
+// Required muscles for completion — excludes secondary muscles that are naturally
+// worked (e.g. triceps on push day). A session is "complete" when all required
+// muscles are covered, regardless of secondary/bonus muscles.
+export const SESSION_REQUIRED_MUSCLES: Record<string, string[]> = {
+  push:                   ["chest", "shoulders", "triceps"],
+  pull:                   ["back", "biceps"],
+  legs:                   ["quads", "hamstrings", "glutes"],
+  lower:                  ["quads", "hamstrings", "glutes"],
+  chest:                  ["chest"],
+  "chest day":            ["chest"],
+  "chest and triceps":    ["chest", "triceps"],
+  back:                   ["back"],
+  "back day":             ["back"],
+  "back and biceps":      ["back", "biceps"],
+  "back and bis":         ["back", "biceps"],
+  shoulders:              ["shoulders"],
+  "shoulder day":         ["shoulders"],
+  delts:                  ["shoulders"],
+  arms:                   ["biceps", "triceps"],
+  "arm day":              ["biceps", "triceps"],
+  "bis and tris":         ["biceps", "triceps"],
+  upper:                  ["chest", "back", "shoulders"],
+  "upper body":           ["chest", "back", "shoulders"],
+  "full body":            ["chest", "back", "shoulders", "quads", "hamstrings"],
+  full:                   ["chest", "back", "shoulders", "quads", "hamstrings"],
+  core:                   ["core"],
+  abs:                    ["core"],
+  "ab day":               ["core"],
+};
+
+export function getRequiredMuscles(sessionType: string): string[] {
+  const key = sessionType.trim().toLowerCase();
+  return SESSION_REQUIRED_MUSCLES[key] ?? SESSION_MUSCLE_MAP[key] ?? [];
+}
+
 export interface AgentActionResponse {
   action: "logged" | "deleted" | "found" | "updated" | "none" | "session_started";
   message: string;
@@ -136,6 +171,7 @@ export interface ManualWorkoutRequest {
   weight: number;
   weight_unit: "lbs" | "kg";
   notes?: string;
+  logged_at?: string;  // "YYYY-MM-DD" — omit for today
 }
 
 export interface WorkoutUpdateRequest {

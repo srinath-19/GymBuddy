@@ -72,6 +72,7 @@ class ManualWorkoutRequest(BaseModel):
     weight: float = Field(ge=0.0)
     weight_unit: Literal["lbs", "kg"] = "lbs"
     notes: str | None = None
+    logged_at: Date | None = None  # "YYYY-MM-DD"; defaults to today on backend if omitted
 
 
 class WorkoutUpdateRequest(BaseModel):
