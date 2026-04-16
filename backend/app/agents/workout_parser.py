@@ -258,65 +258,129 @@ async def start_workout_session(
     ctx: RunContextWrapper[GymContext],
     session_type: str,
     notes: str | None = None,
+    date_str: str | None = None,
 ) -> str:
     """
-    Record what type of workout the user is doing today (e.g. "chest", "push", "legs").
-    Call this when the user says something like "starting chest day", "today is push day",
-    "leg day today", or "I'm doing back and bi".
+    Record (or update) the workout session type for a given day.
+    Use for today ("starting chest day") or a past/future date
+    ("yesterday was push day", "set Monday as legs", "change last Tuesday to pull").
 
     Args:
         session_type: Short label for the session, lowercase (e.g. "chest", "push", "legs", "full body").
         notes: Optional extra context the user mentioned about their plan.
+        date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
     """
     today = datetime.now(timezone.utc).date()
+    if date_str:
+        try:
+            target_date = Date.fromisoformat(date_str)
+        except ValueError:
+            return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
+    else:
+        target_date = today
+
     async with get_session() as session:
         record = await upsert_session(
             session,
             user_id=ctx.context.user_id,
-            date=today,
+            date=target_date,
             session_type=session_type.strip().lower(),
             notes=notes,
         )
     ctx.context.action = "session_started"
     ctx.context.session = record
-    return f"Recorded {session_type} session for today."
+    label = "today" if target_date == today else str(target_date)
+    return f"Recorded {session_type} session for {label}."
 
 
 @function_tool(strict_mode=False)
-async def get_today_workouts(ctx: RunContextWrapper[GymContext]) -> str:
+async def get_session_for_date_tool(
+    ctx: RunContextWrapper[GymContext],
+    date_str: str | None = None,
+) -> str:
     """
-    Retrieve all workouts the user has logged today, along with today's declared
-    session type. Use this when the user asks "what did I do today?",
+    Look up the declared session type for a specific date.
+    Use this when the user asks "what was my session on Monday?",
+    "what did I set for yesterday?", or "what session type was last Tuesday?".
+    Do NOT use for "what did I do today?" — use get_today_workouts for that.
+
+    Args:
+        date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
+    """
+    today = datetime.now(timezone.utc).date()
+    if date_str:
+        try:
+            target_date = Date.fromisoformat(date_str)
+        except ValueError:
+            return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
+    else:
+        target_date = today
+
+    async with get_session() as db:
+        record = await get_session_for_date(db, ctx.context.user_id, target_date)
+
+    label = "today" if target_date == today else str(target_date)
+    if record is None:
+        return f"No session declared for {label}."
+
+    ctx.context.action = "session_started"
+    ctx.context.session = record
+    notes_part = f" ({record.notes})" if record.notes else ""
+    return f"Session for {label}: {record.session_type}{notes_part}."
+
+
+@function_tool(strict_mode=False)
+async def get_today_workouts(
+    ctx: RunContextWrapper[GymContext],
+    date_str: str | None = None,
+) -> str:
+    """
+    Retrieve all workouts the user has logged for a given day, along with that
+    day's declared session type and muscle coverage.
+    Use this when the user asks "what did I do today?", "how was my April 15th workout?",
     "did I hit chest today?", or "did I hit every muscle group today?".
     After calling this tool, reason over the results to give gym-bro friendly
     feedback on muscle coverage and suggest what's still missing.
+
+    Args:
+        date_str: ISO date "YYYY-MM-DD" to look up. Omit (or pass null) for today.
     """
     today = datetime.now(timezone.utc).date()
+    if date_str:
+        try:
+            target_date = Date.fromisoformat(date_str)
+        except ValueError:
+            return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
+    else:
+        target_date = today
+
     async with get_session() as db:
-        today_session = await get_session_for_date(db, ctx.context.user_id, today)
-        workouts = await fetch_workouts_by_date(db, ctx.context.user_id, today)
+        today_session = await get_session_for_date(db, ctx.context.user_id, target_date)
+        workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
 
     ctx.context.action = "found"
     ctx.context.found_workouts = workouts
     ctx.context.session = today_session
 
+    day_label = "today" if target_date == today else str(target_date)
+
     if not workouts:
         if today_session:
             expected = get_expected_muscles(today_session.session_type)
             return (
-                f"No workouts logged yet for today's {today_session.session_type} session. "
+                f"No workouts logged yet for {day_label}'s {today_session.session_type} session. "
                 f"Expected muscles: {', '.join(expected) if expected else 'unknown'}. Get after it!"
             )
-        return "No workouts logged today yet."
+        return f"No workouts logged on {day_label}."
 
     hit_muscles: set[str] = set()
     lines = []
     for w in workouts:
         muscles = ", ".join(t.muscle_group for t in w.muscle_targets) or "unknown muscles"
-        hit_muscles.update(t.muscle_group for t in w.muscle_targets)
+        hit_muscles.update(t.muscle_group for t in w.muscle_targets if t.role == "primary")
         lines.append(f"{w.exercise} {w.sets}×{w.reps} @ {w.weight} {w.weight_unit} → {muscles}")
 
-    summary = f"Today's workouts ({len(workouts)}):\n" + "\n".join(lines)
+    summary = f"Workouts on {day_label} ({len(workouts)}):\n" + "\n".join(lines)
 
     if today_session:
         expected = get_expected_muscles(today_session.session_type)
@@ -451,8 +515,11 @@ Keep responses concise, motivating, and actionable. Never give a wall of text.
 
 - **Log a workout** — user describes a completed exercise (e.g. "bench press 3x10 at 135 lbs")
   → use `date_str` if the user says "I forgot to log yesterday's..." or names a past date
-- **Start a session** — user declares what type of workout today is
-  → call start_workout_session with the session type
+- **Start / set a session** — user declares a session type for today OR a past/future date
+  → call start_workout_session; add date_str if the user names a date other than today
+  ("yesterday was push day", "set Monday as legs", "change last Tuesday to pull")
+- **Get session for a date** — user asks what session was declared on a past day
+  → call get_session_for_date_tool with the ISO date
 - **Get today's workouts** — user asks what they did today or about muscle coverage
   → call get_today_workouts, then reason over the results to answer
 - **Get workouts for a past date** — user asks "what did I do yesterday?" or "show me last Monday's workout"
@@ -539,6 +606,9 @@ Your job:
 - "did 5x5 squats at 100kg" → log_workout(exercise="squat", sets=5, reps=5, weight=100, weight_unit="kg")
 - "I forgot to log yesterday's bench press 3x8 at 185 lbs" → log_workout(..., date_str="YYYY-MM-DD")
 - "starting chest day" / "today is push day" / "leg day today" → start_workout_session(session_type=...)
+- "yesterday was push day" / "set Monday as legs" → start_workout_session(session_type=..., date_str="YYYY-MM-DD")
+- "change last Tuesday's session to pull" → start_workout_session(session_type="pull", date_str="YYYY-MM-DD")
+- "what was my session on Monday?" / "what did I set for yesterday?" → get_session_for_date_tool(date_str=...)
 - "what did I do today?" / "did I hit every muscle group?" → get_today_workouts() then analyze
 - "did I hit chest today?" → get_today_workouts() then check chest in covered list
 - "what did I do yesterday?" / "show me last Monday's workouts" → get_workouts_for_date(date_str=...)
@@ -568,6 +638,7 @@ Always call a tool — never just respond with text when a tool applies.
         delete_exercise_today,
         get_pr_for_exercise,
         get_workouts_for_date,
+        get_session_for_date_tool,
     ],
     model="gpt-5.4-mini",
 )
