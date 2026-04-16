@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import VoiceInput from "@/components/VoiceInput";
+import ExerciseCoach from "@/components/ExerciseCoach";
 import {
   addWorkoutManually,
   AgentActionResponse,
@@ -275,9 +276,9 @@ interface WorkoutFormValues {
   date: string;  // "YYYY-MM-DD"
 }
 
-function blankForm(): WorkoutFormValues {
+function blankForm(exercise = ""): WorkoutFormValues {
   return {
-    exercise: "", sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "",
+    exercise, sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "",
     date: new Date().toISOString().slice(0, 10),
   };
 }
@@ -421,6 +422,11 @@ export default function HomePage() {
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
   const manualFormKey = useRef(0); // bump to reset form after save
+  const [manualPrefill, setManualPrefill] = useState("");
+
+  // Layout
+  const [windowWidth, setWindowWidth] = useState(1200);
+  const [activeTab, setActiveTab] = useState<"log" | "coach">("log");
 
   useEffect(() => {
     createClient()
@@ -434,6 +440,20 @@ export default function HomePage() {
         }
       });
   }, [router]);
+
+  useEffect(() => {
+    setWindowWidth(window.innerWidth);
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const handleLogExercise = useCallback((exerciseName: string) => {
+    setManualPrefill(exerciseName);
+    manualFormKey.current += 1;
+    setShowManualForm(true);
+    if (windowWidth < 900) setActiveTab("log");
+  }, [windowWidth]);
 
   const loadWorkouts = useCallback(async () => {
     try {
@@ -594,8 +614,10 @@ export default function HomePage() {
 
   if (!ready) return null;
 
+  const isMobile = windowWidth < 900;
+
   return (
-    <main style={{ maxWidth: "680px", margin: "0 auto", padding: "2rem 1rem" }}>
+    <main style={{ maxWidth: isMobile ? "680px" : "1280px", margin: "0 auto", padding: "2rem 1rem" }}>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
         <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>GymBuddy</h1>
@@ -607,15 +629,46 @@ export default function HomePage() {
         </button>
       </div>
       {userEmail && (
-        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: "2rem" }}>
+        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: isMobile ? "1rem" : "2rem" }}>
           {userEmail}
         </p>
       )}
       {!userEmail && (
-        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: "2rem" }}>
+        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: isMobile ? "1rem" : "2rem" }}>
           Speak or type your workout to log it instantly.
         </p>
       )}
+
+      {/* Mobile tab switcher */}
+      {isMobile && (
+        <div style={{ display: "flex", gap: 0, marginBottom: "1.5rem", border: "1px solid #e5e7eb", borderRadius: "0.5rem", overflow: "hidden" }}>
+          {(["log", "coach"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              style={{
+                flex: 1, padding: "0.5rem",
+                backgroundColor: activeTab === tab ? "#111827" : "transparent",
+                color: activeTab === tab ? "white" : "#6b7280",
+                border: "none", cursor: "pointer",
+                fontSize: "0.875rem", fontWeight: 600,
+                textTransform: "capitalize",
+              }}
+            >
+              {tab === "log" ? "Workout Log" : "Exercise Coach"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Two-panel layout */}
+      <div style={{ display: isMobile ? "block" : "flex", gap: "2rem", alignItems: "flex-start" }}>
+
+      {/* ── LEFT PANEL: Workout Log ── */}
+      <div style={{
+        flex: "0 0 55%",
+        display: isMobile && activeTab !== "log" ? "none" : "block",
+      }}>
 
       {/* Voice / text input */}
       <section aria-label="Log a workout" style={{ marginBottom: "2.5rem" }}>
@@ -665,9 +718,9 @@ export default function HomePage() {
             </p>
             <WorkoutForm
               key={manualFormKey.current}
-              initial={blankForm()}
+              initial={blankForm(manualPrefill)}
               onSave={handleManualAdd}
-              onCancel={() => setShowManualForm(false)}
+              onCancel={() => { setShowManualForm(false); setManualPrefill(""); }}
               saving={manualSaving}
             />
           </div>
@@ -833,6 +886,25 @@ export default function HomePage() {
           </div>
         )}
       </section>
+
+      </div>{/* end left panel */}
+
+      {/* ── RIGHT PANEL: Exercise Coach ── */}
+      <div style={{
+        flex: "0 0 42%",
+        display: isMobile && activeTab !== "coach" ? "none" : "block",
+        position: isMobile ? "static" : "sticky",
+        top: "2rem",
+        padding: "1.25rem",
+        backgroundColor: "#f8fafc",
+        border: "1px solid #e5e7eb",
+        borderRadius: "0.75rem",
+        minHeight: "400px",
+      }}>
+        <ExerciseCoach onLogExercise={handleLogExercise} />
+      </div>
+
+      </div>{/* end two-panel flex */}
     </main>
   );
 }
