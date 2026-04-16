@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, time, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -57,9 +58,13 @@ async def create_workout_manual(
         notes=body.notes,
     )
 
+    logged_at_dt: datetime | None = None
+    if body.logged_at:
+        logged_at_dt = datetime.combine(body.logged_at, time.min, tzinfo=timezone.utc)
+
     try:
         async with get_session() as session:
-            record = await insert_workout(session, parsed, user_id)
+            record = await insert_workout(session, parsed, user_id, logged_at=logged_at_dt)
             is_pr = await check_personal_record(
                 session, user_id, parsed.exercise, parsed.weight, record.id
             )
