@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .db.database import create_tables
+from .routes.chat import router as chat_router
 from .routes.coach import router as coach_router
 from .routes.workouts import router
 
@@ -48,6 +49,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 app.include_router(router)
 app.include_router(coach_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")

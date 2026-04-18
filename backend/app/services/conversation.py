@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # content is str for text-only turns, or list[dict] for image+text turns.
@@ -12,6 +12,14 @@ from typing import Any
 #   "What muscles does this target?"
 HistoryEntry = dict[str, Any]  # {"role": str, "content": str | list[dict]}
 
+
+class TurnLimitExceededError(Exception):
+    """Raised when a conversation has reached MAX_TURNS."""
+
+
+# NOTE: conversations is an in-process dict. This works correctly only under a
+# single-worker deployment (uvicorn without --workers N). Under multiple workers,
+# each process has its own copy and follow-up turns may land on the wrong worker.
 conversations: dict[str, dict] = {}
 
 CONVERSATION_TTL = timedelta(minutes=10)
@@ -19,8 +27,8 @@ MAX_TURNS = 6
 
 
 def sweep_expired() -> None:
-    """Lazy cleanup — call at the start of each /coach/ask request."""
-    now = datetime.utcnow()
+    """Lazy cleanup — call at the start of each request."""
+    now = datetime.now(timezone.utc)
     expired = [
         k for k, v in conversations.items()
         if now - v["last_active"] > CONVERSATION_TTL
@@ -37,7 +45,7 @@ def get_or_create(conversation_id: str | None) -> tuple[str, dict]:
     new_id = str(uuid.uuid4())
     conversations[new_id] = {
         "history": [],
-        "last_active": datetime.utcnow(),
+        "last_active": datetime.now(timezone.utc),
         "turn_count": 0,
     }
     return new_id, conversations[new_id]
@@ -52,7 +60,7 @@ def append_turn(
     entry = conversations[conversation_id]
     entry["history"].append({"role": "user", "content": user_content})
     entry["history"].append({"role": "assistant", "content": assistant_content})
-    entry["last_active"] = datetime.utcnow()
+    entry["last_active"] = datetime.now(timezone.utc)
     entry["turn_count"] += 1
 
 
