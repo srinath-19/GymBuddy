@@ -60,8 +60,35 @@ export const SESSION_MUSCLE_MAP: Record<string, string[]> = {
   "ab day":          ["core"],
 };
 
+// Keyword fallback: split session type by spaces/symbols and match known muscle words.
+// Handles ad-hoc names like "back biceps", "chest shoulders triceps", etc.
+const MUSCLE_KEYWORDS: Record<string, string> = {
+  chest: "chest",
+  shoulder: "shoulders", shoulders: "shoulders", delt: "shoulders", delts: "shoulders",
+  tricep: "triceps", triceps: "triceps",
+  back: "back", lat: "back", lats: "back",
+  bicep: "biceps", biceps: "biceps",
+  trap: "traps", traps: "traps",
+  quad: "quads", quads: "quads",
+  hamstring: "hamstrings", hamstrings: "hamstrings",
+  glute: "glutes", glutes: "glutes",
+  calf: "calves", calves: "calves",
+  core: "core", abs: "core",
+};
+
+function extractMusclesFromLabel(sessionType: string): string[] {
+  const words = sessionType.trim().toLowerCase().split(/[\s,&+/]+/);
+  const found = new Set<string>();
+  for (const word of words) {
+    const muscle = MUSCLE_KEYWORDS[word];
+    if (muscle) found.add(muscle);
+  }
+  return [...found];
+}
+
 export function getExpectedMuscles(sessionType: string): string[] {
-  return SESSION_MUSCLE_MAP[sessionType.trim().toLowerCase()] ?? [];
+  const key = sessionType.trim().toLowerCase();
+  return SESSION_MUSCLE_MAP[key] ?? extractMusclesFromLabel(sessionType);
 }
 
 // Required muscles for completion — excludes secondary muscles that are naturally
@@ -96,7 +123,7 @@ export const SESSION_REQUIRED_MUSCLES: Record<string, string[]> = {
 
 export function getRequiredMuscles(sessionType: string): string[] {
   const key = sessionType.trim().toLowerCase();
-  return SESSION_REQUIRED_MUSCLES[key] ?? SESSION_MUSCLE_MAP[key] ?? [];
+  return SESSION_REQUIRED_MUSCLES[key] ?? SESSION_MUSCLE_MAP[key] ?? extractMusclesFromLabel(sessionType);
 }
 
 export interface AgentActionResponse {
@@ -159,8 +186,8 @@ export async function logWorkout(
   return result.data;
 }
 
-export async function getWorkouts(): Promise<WorkoutLogResponse[]> {
-  const result = await apiFetch<WorkoutLogResponse[]>("/api/v1/workouts");
+export async function getWorkouts(limit = 50): Promise<WorkoutLogResponse[]> {
+  const result = await apiFetch<WorkoutLogResponse[]>(`/api/v1/workouts?limit=${limit}`);
   return result.data ?? [];
 }
 
@@ -212,7 +239,20 @@ export async function deleteWorkout(id: string): Promise<void> {
   });
 }
 
-export async function getSessions(days = 7): Promise<WorkoutSession[]> {
+export async function getSessions(days = 90): Promise<WorkoutSession[]> {
   const result = await apiFetch<WorkoutSession[]>(`/api/v1/sessions?days=${days}`);
   return result.data ?? [];
+}
+
+export async function updateSession(
+  date: string,
+  sessionType: string,
+  notes?: string,
+): Promise<WorkoutSession> {
+  const result = await apiFetch<WorkoutSession>(`/api/v1/sessions/${date}`, {
+    method: "PUT",
+    body: JSON.stringify({ session_type: sessionType, notes: notes ?? null }),
+  });
+  if (!result.data) throw new Error("No data returned from server");
+  return result.data;
 }

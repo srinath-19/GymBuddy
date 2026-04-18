@@ -188,11 +188,38 @@ async def insert_muscle_targets(
 async def fetch_workouts(
     session: AsyncSession, user_id: uuid.UUID, limit: int = 50
 ) -> list[WorkoutLogResponse]:
+    # CTE computes the max weight per exercise for this user in one pass,
+    # eliminating the N correlated subqueries from _WORKOUT_SELECT.
     result = await session.execute(
-        text(_WORKOUT_SELECT + """
+        text("""
+            WITH pr AS (
+                SELECT LOWER(exercise) AS exercise, MAX(weight) AS max_weight
+                FROM workout_logs
+                WHERE user_id = :user_id
+                GROUP BY LOWER(exercise)
+            )
+            SELECT
+                w.id, w.user_id, w.exercise, w.sets, w.reps, w.weight,
+                w.weight_unit, w.notes, w.logged_at, w.created_at,
+                COALESCE(w.weight = pr.max_weight, false) AS is_personal_record,
+                COALESCE(
+                    JSON_AGG(
+                        JSON_BUILD_OBJECT(
+                            'muscle_group', mt.muscle_group,
+                            'specific_muscles', mt.specific_muscles,
+                            'role', mt.role,
+                            'source', mt.source
+                        )
+                        ORDER BY mt.role DESC
+                    ) FILTER (WHERE mt.id IS NOT NULL),
+                    '[]'
+                ) AS muscle_targets_json
+            FROM workout_logs w
+            LEFT JOIN pr ON LOWER(w.exercise) = pr.exercise
+            LEFT JOIN workout_muscle_targets mt ON mt.workout_id = w.id
             WHERE w.user_id = :user_id
             GROUP BY w.id, w.user_id, w.exercise, w.sets, w.reps, w.weight,
-                     w.weight_unit, w.notes, w.logged_at, w.created_at
+                     w.weight_unit, w.notes, w.logged_at, w.created_at, pr.max_weight
             ORDER BY w.logged_at DESC
             LIMIT :limit
         """),
