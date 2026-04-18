@@ -7,7 +7,7 @@ from datetime import date as Date, timezone, datetime
 
 from agents import Agent, RunContextWrapper, Runner, function_tool
 
-from ..data.muscle_lookup import lookup_muscles
+from ..data.muscle_ai import infer_muscles
 from ..data.session_muscles import get_expected_muscles
 from ..db.database import get_session
 from ..db.queries import (
@@ -40,7 +40,6 @@ class GymContext:
     action: str = "none"
     logged_workout: WorkoutLogResponse | None = None
     found_workouts: list[WorkoutLogResponse] = field(default_factory=list)
-    deleted_workout: WorkoutLogResponse | None = None
     deleted_workouts: list[WorkoutLogResponse] = field(default_factory=list)
     session: WorkoutSession | None = None
 
@@ -96,13 +95,8 @@ async def log_workout(
         is_pr = await check_personal_record(
             session, user_id, record.exercise, record.weight, record.id
         )
-        muscle_data = lookup_muscles(parsed.exercise)
-        targets = await insert_muscle_targets(
-            session,
-            record.id,
-            muscle_data or [],
-            "lookup" if muscle_data is not None else "ai_inferred",
-        )
+        muscle_data = await infer_muscles(parsed.exercise)
+        targets = await insert_muscle_targets(session, record.id, muscle_data, "ai_inferred")
         record = record.model_copy(update={"is_personal_record": is_pr, "muscle_targets": targets})
 
     ctx.context.action = "logged"
@@ -150,7 +144,7 @@ async def delete_workout(ctx: RunContextWrapper[GymContext], workout_id: str) ->
         return f"Workout {workout_id} not found or does not belong to you."
 
     ctx.context.action = "deleted"
-    ctx.context.deleted_workout = deleted
+    ctx.context.deleted_workouts = [deleted]
     return (
         f"Deleted: {deleted.exercise} {deleted.sets}×{deleted.reps} "
         f"@ {deleted.weight} {deleted.weight_unit}"
@@ -323,7 +317,7 @@ async def get_session_for_date_tool(
     if record is None:
         return f"No session declared for {label}."
 
-    ctx.context.action = "session_started"
+    ctx.context.action = "found"
     ctx.context.session = record
     notes_part = f" ({record.notes})" if record.notes else ""
     return f"Session for {label}: {record.session_type}{notes_part}."
@@ -335,10 +329,13 @@ async def get_today_workouts(
     date_str: str | None = None,
 ) -> str:
     """
-    Retrieve all workouts the user has logged for a given day, along with that
-    day's declared session type and muscle coverage.
-    Use this when the user asks "what did I do today?", "how was my April 15th workout?",
-    "did I hit chest today?", or "did I hit every muscle group today?".
+    Retrieve all workouts logged for a given day, plus that day's session type
+    and a muscle coverage analysis. Works for today AND any past date.
+    Use this when the user wants a SUMMARY or RECAP of a day's workout:
+    - "what did I do today?", "did I hit chest today?", "did I hit every muscle group?"
+    - "how was my workout yesterday?", "how was my push day on Monday?"
+    - "recap of April 14th", "how did my session go on [date]?"
+    - "what muscles did I hit on [date]?"
     After calling this tool, reason over the results to give gym-bro friendly
     feedback on muscle coverage and suggest what's still missing.
 
@@ -520,10 +517,12 @@ Keep responses concise, motivating, and actionable. Never give a wall of text.
   ("yesterday was push day", "set Monday as legs", "change last Tuesday to pull")
 - **Get session for a date** — user asks what session was declared on a past day
   → call get_session_for_date_tool with the ISO date
-- **Get today's workouts** — user asks what they did today or about muscle coverage
-  → call get_today_workouts, then reason over the results to answer
-- **Get workouts for a past date** — user asks "what did I do yesterday?" or "show me last Monday's workout"
-  → call get_workouts_for_date with the ISO date; also call this BEFORE updating a past workout
+- **Get workout summary (any date)** — user wants a day's exercises + session + muscle analysis
+  - Today: "what did I do today?", "did I hit every muscle group?" → get_today_workouts()
+  - Past date summary: "how was my workout yesterday?", "how was my push day on Monday?", "recap of April 14th", "how did my session go on [date]?", "what muscles did I hit on [date]?" → get_today_workouts(date_str="YYYY-MM-DD")
+  After the tool returns, reason over results and give muscle-coverage feedback.
+- **Get workouts for editing** — user wants a raw list to update/reference; also REQUIRED before update_workout_tool
+  - "show me last Monday's workout", "list yesterday's exercises", or any pre-edit lookup → get_workouts_for_date(date_str=...)
 - **Delete the last workout** — user says "delete my last workout" or "undo that"
   → first call get_last_workout to get the ID, then call delete_workout with that ID
 - **Delete by exercise name** — user names a specific exercise to remove
@@ -611,7 +610,8 @@ Your job:
 - "what was my session on Monday?" / "what did I set for yesterday?" → get_session_for_date_tool(date_str=...)
 - "what did I do today?" / "did I hit every muscle group?" → get_today_workouts() then analyze
 - "did I hit chest today?" → get_today_workouts() then check chest in covered list
-- "what did I do yesterday?" / "show me last Monday's workouts" → get_workouts_for_date(date_str=...)
+- "how was my workout yesterday?" / "how was my push day on Monday?" / "recap of April 14th" → get_today_workouts(date_str="YYYY-MM-DD") then analyze
+- "show me last Monday's workouts" / "list yesterday's exercises" (raw list for editing) → get_workouts_for_date(date_str=...)
 - "delete my last workout" → get_last_workout() → delete_workout(id=...)
 - "delete bench press from today" / "remove my squats" → delete_exercise_today(exercise=...)
 - "delete my squats from yesterday" → delete_exercise_today(exercise="squat", date_str="YYYY-MM-DD")
@@ -640,7 +640,7 @@ Always call a tool — never just respond with text when a tool applies.
         get_workouts_for_date,
         get_session_for_date_tool,
     ],
-    model="gpt-5.4-mini",
+    model="gpt-4o-mini",
 )
 
 
@@ -655,9 +655,11 @@ async def run_agent(transcript: str, user_id: uuid.UUID) -> tuple[GymContext, st
     the message is a human-readable summary of what happened.
     """
     context = GymContext(user_id=user_id)
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    dated_transcript = f"[Today is {today_iso}]\n{transcript}"
 
     result = await asyncio.wait_for(
-        Runner.run(_agent, input=transcript, context=context),
+        Runner.run(_agent, input=dated_transcript, context=context),
         timeout=AGENT_TIMEOUT_SECONDS,
     )
 
