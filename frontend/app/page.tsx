@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { useRouter } from "next/navigation";
 import VoiceInput from "@/components/VoiceInput";
-import ExerciseCoach from "@/components/ExerciseCoach";
 import {
   addWorkoutManually,
   AgentActionResponse,
@@ -14,6 +14,7 @@ import {
   getWorkouts,
   logWorkout,
   ManualWorkoutRequest,
+  updateSession,
   updateWorkout,
   WorkoutLogResponse,
   WorkoutSession,
@@ -41,6 +42,10 @@ function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]):
     map.get(key)!.push(w);
   }
   const sessionMap = new Map(sessions.map((s) => [s.date, s]));
+  // Include session-only days (declared session but no exercises logged yet)
+  for (const date of sessionMap.keys()) {
+    if (!map.has(date)) map.set(date, []);
+  }
   const groups: DayGroup[] = [];
   for (const [date, ws] of map) {
     const d = new Date(date + "T12:00:00"); // noon UTC-safe parse
@@ -51,8 +56,29 @@ function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]):
       workouts: ws,
     });
   }
-  // Already ordered newest-first from API; map preserves insertion order
-  return groups;
+  return groups.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// ---------------------------------------------------------------------------
+// Week bounds helper
+// ---------------------------------------------------------------------------
+function getWeekBounds(offset: number): { start: string; end: string; label: string } {
+  const now = new Date();
+  const dow = now.getDay(); // 0=Sun
+  const toMonday = dow === 0 ? -6 : 1 - dow;
+  const mon = new Date(now);
+  mon.setDate(now.getDate() + toMonday + offset * 7);
+  mon.setHours(0, 0, 0, 0);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const toISO = (d: Date) => d.toISOString().slice(0, 10);
+  const label =
+    offset === 0
+      ? "This week"
+      : mon.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
+        " – " +
+        sun.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return { start: toISO(mon), end: toISO(sun), label };
 }
 
 // ---------------------------------------------------------------------------
@@ -68,9 +94,9 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
         backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem",
       }}>
         {action.message && (
-          <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", fontWeight: 500, color: "#1e40af", lineHeight: 1.5 }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", fontWeight: 500, color: "#1e40af", lineHeight: 1.5 }}>{children}</p> }}>
             {action.message}
-          </p>
+          </ReactMarkdown>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <span style={{
@@ -102,9 +128,9 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
         }}
       >
         {action.message && (
-          <p style={{ margin: "0 0 0.6rem", fontSize: "0.9rem", fontWeight: 500, color: "#166534", lineHeight: 1.5 }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.6rem", fontSize: "0.9rem", fontWeight: 500, color: "#166534", lineHeight: 1.5 }}>{children}</p> }}>
             {action.message}
-          </p>
+          </ReactMarkdown>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <span style={{ fontSize: "0.8rem", color: "#374151" }}>
@@ -184,15 +210,9 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
       }}>
         {/* LLM sentence summary — always shown at top (TTS-ready) */}
         {action.message && (
-          <p style={{
-            margin: "0 0 0.6rem",
-            fontSize: "0.9rem",
-            fontWeight: 500,
-            color: "#1e293b",
-            lineHeight: 1.5,
-          }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.6rem", fontSize: "0.9rem", fontWeight: 500, color: "#1e293b", lineHeight: 1.5 }}>{children}</p> }}>
             {action.message}
-          </p>
+          </ReactMarkdown>
         )}
         {/* Session badge + coverage label */}
         {action.session && (
@@ -276,10 +296,10 @@ interface WorkoutFormValues {
   date: string;  // "YYYY-MM-DD"
 }
 
-function blankForm(exercise = ""): WorkoutFormValues {
+function blankForm(exercise = "", date?: string): WorkoutFormValues {
   return {
     exercise, sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: date ?? new Date().toISOString().slice(0, 10),
   };
 }
 
@@ -418,15 +438,19 @@ export default function HomePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [crudError, setCrudError] = useState<string | null>(null);
 
-  // Manual-add form
+  // Manual-add form (global top-level) + per-date add
   const [showManualForm, setShowManualForm] = useState(false);
+  const [addForDate, setAddForDate] = useState<string | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
-  const manualFormKey = useRef(0); // bump to reset form after save
-  const [manualPrefill, setManualPrefill] = useState("");
+  const manualFormKey = useRef(0);
 
-  // Layout
-  const [windowWidth, setWindowWidth] = useState(1200);
-  const [activeTab, setActiveTab] = useState<"log" | "coach">("log");
+  // Week navigation (0 = current week, -1 = last week, …)
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  // Inline session edit
+  const [editSessionDate, setEditSessionDate] = useState<string | null>(null);
+  const [editSessionInput, setEditSessionInput] = useState("");
+  const [sessionSaving, setSessionSaving] = useState(false);
 
   useEffect(() => {
     createClient()
@@ -436,30 +460,27 @@ export default function HomePage() {
           router.replace("/login");
         } else {
           setUserEmail(data.session.user.email ?? null);
+          // Show stale data instantly; loadWorkouts will replace it in background
+          try {
+            const cw = sessionStorage.getItem("gymbuddy:workouts");
+            const cs = sessionStorage.getItem("gymbuddy:sessions");
+            if (cw) setWorkouts(JSON.parse(cw));
+            if (cs) setSessions(JSON.parse(cs));
+          } catch { /* sessionStorage unavailable */ }
           setReady(true);
         }
       });
   }, [router]);
-
-  useEffect(() => {
-    setWindowWidth(window.innerWidth);
-    const onResize = () => setWindowWidth(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  const handleLogExercise = useCallback((exerciseName: string) => {
-    setManualPrefill(exerciseName);
-    manualFormKey.current += 1;
-    setShowManualForm(true);
-    if (windowWidth < 900) setActiveTab("log");
-  }, [windowWidth]);
 
   const loadWorkouts = useCallback(async () => {
     try {
       const [workoutData, sessionData] = await Promise.all([getWorkouts(), getSessions()]);
       setWorkouts(workoutData);
       setSessions(sessionData);
+      try {
+        sessionStorage.setItem("gymbuddy:workouts", JSON.stringify(workoutData));
+        sessionStorage.setItem("gymbuddy:sessions", JSON.stringify(sessionData));
+      } catch { /* storage full or unavailable */ }
       setHistoryError(false);
     } catch {
       setHistoryError(true);
@@ -470,7 +491,7 @@ export default function HomePage() {
     if (ready) void loadWorkouts();
   }, [ready, loadWorkouts]);
 
-  // Voice / text agent submit
+  // Voice / text agent submit — goes directly to the workout parser agent
   const handleTranscript = useCallback(
     async (text: string) => {
       setUiState("submitting");
@@ -558,7 +579,8 @@ export default function HomePage() {
     async (values: WorkoutFormValues) => {
       setCrudError(null);
       manualFormKey.current += 1;
-      setShowManualForm(false); // close form immediately
+      setShowManualForm(false);
+      setAddForDate(null); // close whichever form triggered the save
       setManualSaving(true);
 
       const tempId = `pending-${Date.now()}`;
@@ -606,6 +628,24 @@ export default function HomePage() {
     [loadWorkouts]
   );
 
+  const handleSessionSave = useCallback(
+    async (date: string, sessionType: string) => {
+      if (!sessionType.trim()) return;
+      setSessionSaving(true);
+      setCrudError(null);
+      try {
+        await updateSession(date, sessionType.trim());
+        setEditSessionDate(null);
+        await loadWorkouts();
+      } catch (err) {
+        setCrudError(err instanceof Error ? err.message : "Could not save session.");
+      } finally {
+        setSessionSaving(false);
+      }
+    },
+    [loadWorkouts]
+  );
+
   const handleSignOut = async () => {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -614,13 +654,11 @@ export default function HomePage() {
 
   if (!ready) return null;
 
-  const isMobile = windowWidth < 900;
-
   return (
-    <main style={{ maxWidth: isMobile ? "680px" : "1280px", margin: "0 auto", padding: "2rem 1rem" }}>
+    <main style={{ maxWidth: "720px", margin: "0 auto", padding: "2rem 1rem" }}>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
-        <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>GymBuddy</h1>
+        <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Workouts</h1>
         <button
           onClick={handleSignOut}
           style={{ fontSize: "0.875rem", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0.25rem 0.5rem" }}
@@ -629,46 +667,17 @@ export default function HomePage() {
         </button>
       </div>
       {userEmail && (
-        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: isMobile ? "1rem" : "2rem" }}>
+        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: "2rem" }}>
           {userEmail}
         </p>
       )}
       {!userEmail && (
-        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: isMobile ? "1rem" : "2rem" }}>
+        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: "2rem" }}>
           Speak or type your workout to log it instantly.
         </p>
       )}
 
-      {/* Mobile tab switcher */}
-      {isMobile && (
-        <div style={{ display: "flex", gap: 0, marginBottom: "1.5rem", border: "1px solid #e5e7eb", borderRadius: "0.5rem", overflow: "hidden" }}>
-          {(["log", "coach"] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              style={{
-                flex: 1, padding: "0.5rem",
-                backgroundColor: activeTab === tab ? "#111827" : "transparent",
-                color: activeTab === tab ? "white" : "#6b7280",
-                border: "none", cursor: "pointer",
-                fontSize: "0.875rem", fontWeight: 600,
-                textTransform: "capitalize",
-              }}
-            >
-              {tab === "log" ? "Workout Log" : "Exercise Coach"}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Two-panel layout */}
-      <div style={{ display: isMobile ? "block" : "flex", gap: "2rem", alignItems: "flex-start" }}>
-
-      {/* ── LEFT PANEL: Workout Log ── */}
-      <div style={{
-        flex: "0 0 55%",
-        display: isMobile && activeTab !== "log" ? "none" : "block",
-      }}>
+      <div>
 
       {/* Voice / text input */}
       <section aria-label="Log a workout" style={{ marginBottom: "2.5rem" }}>
@@ -718,13 +727,43 @@ export default function HomePage() {
             </p>
             <WorkoutForm
               key={manualFormKey.current}
-              initial={blankForm(manualPrefill)}
+              initial={blankForm()}
               onSave={handleManualAdd}
-              onCancel={() => { setShowManualForm(false); setManualPrefill(""); }}
+              onCancel={() => setShowManualForm(false)}
               saving={manualSaving}
             />
           </div>
         )}
+
+        {/* Week navigator */}
+        {(() => {
+          const { label } = getWeekBounds(weekOffset);
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
+              <button
+                onClick={() => setWeekOffset((w) => w - 1)}
+                style={{ fontSize: "0.8rem", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0.2rem 0.4rem" }}
+              >
+                ← Prev
+              </button>
+              <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", flex: 1, textAlign: "center" }}>
+                {label}
+              </span>
+              <button
+                onClick={() => setWeekOffset((w) => w + 1)}
+                disabled={weekOffset === 0}
+                style={{
+                  fontSize: "0.8rem", color: "#6b7280", background: "none", border: "none",
+                  cursor: weekOffset === 0 ? "default" : "pointer",
+                  padding: "0.2rem 0.4rem",
+                  opacity: weekOffset === 0 ? 0.35 : 1,
+                }}
+              >
+                Next →
+              </button>
+            </div>
+          );
+        })()}
 
         {crudError && (
           <p role="alert" style={{ color: "#dc2626", marginBottom: "0.75rem", fontSize: "0.875rem" }}>
@@ -738,11 +777,16 @@ export default function HomePage() {
           </p>
         )}
 
-        {!historyError && workouts.length === 0 ? (
-          <p style={{ color: "#9ca3af" }}>No workouts logged yet.</p>
-        ) : (
+        {!historyError && (() => {
+          const { start, end } = getWeekBounds(weekOffset);
+          const weekGroups = groupByDay(workouts, sessions).filter(
+            (g) => g.date >= start && g.date <= end
+          );
+          return weekGroups.length === 0 ? (
+            <p style={{ color: "#9ca3af" }}>No workouts this week.</p>
+          ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-            {groupByDay(workouts, sessions).map((group) => (
+            {weekGroups.map((group) => (
               <div key={group.date}>
                 {/* Day header */}
                 <div style={{
@@ -756,17 +800,94 @@ export default function HomePage() {
                   <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>
                     {group.label}
                   </span>
-                  {group.session && (
-                    <span style={{
-                      fontSize: "0.7rem", fontWeight: 600,
-                      backgroundColor: "#eff6ff", color: "#1d4ed8",
-                      padding: "0.1rem 0.55rem", borderRadius: "9999px",
-                      border: "1px solid #bfdbfe", textTransform: "capitalize",
-                    }}>
-                      {group.session.session_type}
-                    </span>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    {/* Session badge / inline session edit */}
+                    {editSessionDate === group.date ? (
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); handleSessionSave(group.date, editSessionInput); }}
+                        style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
+                      >
+                        <input
+                          autoFocus
+                          value={editSessionInput}
+                          onChange={(e) => setEditSessionInput(e.target.value)}
+                          placeholder="e.g. push, legs, chest"
+                          disabled={sessionSaving}
+                          style={{
+                            padding: "0.15rem 0.4rem", fontSize: "0.7rem",
+                            border: "1px solid #93c5fd", borderRadius: "0.25rem",
+                            width: "9rem", outline: "none",
+                          }}
+                        />
+                        <button type="submit" disabled={sessionSaving || !editSessionInput.trim()}
+                          style={{ fontSize: "0.65rem", color: "#1d4ed8", background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem" }}>
+                          {sessionSaving ? "…" : "Save"}
+                        </button>
+                        <button type="button" onClick={() => setEditSessionDate(null)} disabled={sessionSaving}
+                          style={{ fontSize: "0.65rem", color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem" }}>
+                          Cancel
+                        </button>
+                      </form>
+                    ) : group.session ? (
+                      <button
+                        onClick={() => { setEditSessionDate(group.date); setEditSessionInput(group.session!.session_type); }}
+                        title="Edit session"
+                        style={{
+                          fontSize: "0.7rem", fontWeight: 600,
+                          backgroundColor: "#eff6ff", color: "#1d4ed8",
+                          padding: "0.1rem 0.55rem", borderRadius: "9999px",
+                          border: "1px solid #bfdbfe", textTransform: "capitalize",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {group.session.session_type} ✎
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { setEditSessionDate(group.date); setEditSessionInput(""); }}
+                        title="Set session type"
+                        style={{
+                          fontSize: "0.7rem", color: "#9ca3af",
+                          background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem",
+                        }}
+                      >
+                        + session
+                      </button>
+                    )}
+                    {/* Per-date add workout button */}
+                    <button
+                      onClick={() => setAddForDate(addForDate === group.date ? null : group.date)}
+                      title="Add workout for this day"
+                      style={{
+                        fontSize: "0.8rem", fontWeight: 600,
+                        color: addForDate === group.date ? "#6b7280" : "#2563eb",
+                        background: "none", border: "none", cursor: "pointer",
+                        padding: "0.1rem 0.3rem", lineHeight: 1,
+                      }}
+                    >
+                      {addForDate === group.date ? "✕" : "+"}
+                    </button>
+                  </div>
                 </div>
+
+                {/* Per-date manual-add form */}
+                {addForDate === group.date && (
+                  <div style={{
+                    marginBottom: "0.75rem", padding: "0.875rem",
+                    backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.5rem",
+                  }}>
+                    <p style={{ margin: "0 0 0.4rem", fontWeight: 600, fontSize: "0.8rem", color: "#374151" }}>
+                      Add workout — {group.label}
+                    </p>
+                    <WorkoutForm
+                      key={`${manualFormKey.current}-${group.date}`}
+                      initial={blankForm("", group.date)}
+                      onSave={handleManualAdd}
+                      onCancel={() => setAddForDate(null)}
+                      saving={manualSaving}
+                    />
+                  </div>
+                )}
 
                 {/* Workout cards for this day */}
                 <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
@@ -884,27 +1005,11 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-        )}
+          );
+        })()}
       </section>
 
-      </div>{/* end left panel */}
-
-      {/* ── RIGHT PANEL: Exercise Coach ── */}
-      <div style={{
-        flex: "0 0 42%",
-        display: isMobile && activeTab !== "coach" ? "none" : "block",
-        position: isMobile ? "static" : "sticky",
-        top: "2rem",
-        padding: "1.25rem",
-        backgroundColor: "#f8fafc",
-        border: "1px solid #e5e7eb",
-        borderRadius: "0.75rem",
-        minHeight: "400px",
-      }}>
-        <ExerciseCoach onLogExercise={handleLogExercise} />
-      </div>
-
-      </div>{/* end two-panel flex */}
+      </div>{/* end content */}
     </main>
   );
 }
