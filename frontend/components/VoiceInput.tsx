@@ -59,6 +59,9 @@ declare global {
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
   disabled?: boolean;
+  label?: string;
+  placeholder?: string;
+  submitLabel?: string;
 }
 
 type RecognitionState = "idle" | "listening";
@@ -66,6 +69,9 @@ type RecognitionState = "idle" | "listening";
 export default function VoiceInput({
   onTranscript,
   disabled = false,
+  label,
+  placeholder = "e.g. bench press 3x10 at 135 lbs",
+  submitLabel = "Log",
 }: VoiceInputProps) {
   const [state, setState] = useState<RecognitionState>("idle");
   const [interimText, setInterimText] = useState("");
@@ -209,7 +215,7 @@ export default function VoiceInput({
           htmlFor="workout-text-input"
           style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}
         >
-          {speechSupported ? "Or type your workout:" : "Describe your workout:"}
+          {label ?? (speechSupported ? "Or type your workout:" : "Describe your workout:")}
         </label>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <input
@@ -217,7 +223,7 @@ export default function VoiceInput({
             type="text"
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
-            placeholder="e.g. bench press 3x10 at 135 lbs"
+            placeholder={placeholder}
             disabled={disabled}
             style={{
               flex: 1,
@@ -242,7 +248,7 @@ export default function VoiceInput({
               opacity: disabled || !textInput.trim() ? 0.6 : 1,
             }}
           >
-            Log
+            {submitLabel}
           </button>
         </div>
       </form>
