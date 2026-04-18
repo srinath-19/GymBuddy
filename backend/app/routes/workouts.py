@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, time, timezone
+from datetime import date as Date, datetime, time, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,7 +10,14 @@ from sqlalchemy import text
 
 from ..agents.workout_parser import run_agent
 from ..auth.dependencies import get_current_user
-from ..data.muscle_lookup import lookup_muscles
+from ..cache.redis_client import (
+    get_cached_sessions,
+    get_cached_workouts,
+    invalidate_user,
+    set_cached_sessions,
+    set_cached_workouts,
+)
+from ..data.muscle_ai import infer_muscles
 from ..db.database import get_session
 from ..db.queries import (
     check_personal_record,
@@ -20,12 +27,16 @@ from ..db.queries import (
     insert_muscle_targets,
     insert_workout,
     update_workout,
+    upsert_session,
 )
 from ..models.workout import (
     AgentActionResponse,
     APIResponse,
     ManualWorkoutRequest,
+    SessionUpdateRequest,
     WorkoutLog,
+    WorkoutLogResponse,
+    WorkoutSession,
     WorkoutUpdateRequest,
     WorkoutRequest,
 )
@@ -70,9 +81,9 @@ async def create_workout_manual(
             )
             record.is_personal_record = is_pr
 
-            muscle_dicts = lookup_muscles(parsed.exercise)
+            muscle_dicts = await infer_muscles(parsed.exercise)
             if muscle_dicts:
-                targets = await insert_muscle_targets(session, record.id, muscle_dicts, "lookup")
+                targets = await insert_muscle_targets(session, record.id, muscle_dicts, "ai_inferred")
                 record.muscle_targets = targets
     except Exception as exc:
         logger.exception("Manual insert failed")
@@ -81,6 +92,7 @@ async def create_workout_manual(
             detail="Database error",
         ) from exc
 
+    await invalidate_user(str(user_id))
     return APIResponse(success=True, data=record)
 
 
@@ -115,6 +127,7 @@ async def create_workout(
         workouts=context.found_workouts or context.deleted_workouts or None,
         session=context.session,
     )
+    await invalidate_user(str(user_id))
     return APIResponse(success=True, data=action_data)
 
 
@@ -128,10 +141,14 @@ async def create_workout(
     status_code=status.HTTP_200_OK,
 )
 async def list_sessions(
-    days: int = Query(default=7, ge=1, le=30),
+    days: int = Query(default=7, ge=1, le=90),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse:
     user_id = UUID(current_user["sub"])
+
+    cached = await get_cached_sessions(str(user_id))
+    if cached is not None:
+        return APIResponse(success=True, data=[WorkoutSession.model_validate(r) for r in cached])
 
     try:
         async with get_session() as session:
@@ -143,6 +160,7 @@ async def list_sessions(
             detail="Database error",
         ) from exc
 
+    await set_cached_sessions(str(user_id), [r.model_dump(mode="json") for r in records])
     return APIResponse(success=True, data=records)
 
 
@@ -161,6 +179,10 @@ async def list_workouts(
 ) -> APIResponse:
     user_id = UUID(current_user["sub"])
 
+    cached = await get_cached_workouts(str(user_id))
+    if cached is not None:
+        return APIResponse(success=True, data=[WorkoutLogResponse.model_validate(r) for r in cached])
+
     try:
         async with get_session() as session:
             records = await fetch_workouts(session, user_id=user_id, limit=limit)
@@ -171,6 +193,7 @@ async def list_workouts(
             detail="Database error",
         ) from exc
 
+    await set_cached_workouts(str(user_id), [r.model_dump(mode="json") for r in records])
     return APIResponse(success=True, data=records)
 
 
@@ -207,13 +230,13 @@ async def edit_workout(
             # targets if the new name has a lookup hit. If the new name is unknown,
             # keep the existing muscle targets rather than silently blanking them.
             if "exercise" in updates:
-                muscle_dicts = lookup_muscles(updates["exercise"].strip().lower())
+                muscle_dicts = await infer_muscles(updates["exercise"].strip().lower())
                 if muscle_dicts:
                     await session.execute(
                         text("DELETE FROM workout_muscle_targets WHERE workout_id = :id"),
                         {"id": workout_id},
                     )
-                    targets = await insert_muscle_targets(session, workout_id, muscle_dicts, "lookup")
+                    targets = await insert_muscle_targets(session, workout_id, muscle_dicts, "ai_inferred")
                     record.muscle_targets = targets
     except HTTPException:
         raise
@@ -224,6 +247,7 @@ async def edit_workout(
             detail="Database error",
         ) from exc
 
+    await invalidate_user(str(user_id))
     return APIResponse(success=True, data=record)
 
 
@@ -255,4 +279,49 @@ async def remove_workout(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workout not found")
 
+    await invalidate_user(str(user_id))
+    return APIResponse(success=True, data=record)
+
+
+# ---------------------------------------------------------------------------
+# PUT /sessions/{date_str}  — upsert session type for a specific date
+# ---------------------------------------------------------------------------
+
+@router.put(
+    "/sessions/{date_str}",
+    response_model=APIResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_session(
+    date_str: str,
+    body: SessionUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+) -> APIResponse:
+    user_id = UUID(current_user["sub"])
+
+    try:
+        target_date = Date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid date format: {date_str!r}. Use YYYY-MM-DD.",
+        )
+
+    try:
+        async with get_session() as session:
+            record: WorkoutSession = await upsert_session(
+                session,
+                user_id=user_id,
+                date=target_date,
+                session_type=body.session_type.strip().lower(),
+                notes=body.notes,
+            )
+    except Exception as exc:
+        logger.exception("Session upsert failed for date %s", date_str)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error",
+        ) from exc
+
+    await invalidate_user(str(user_id))
     return APIResponse(success=True, data=record)

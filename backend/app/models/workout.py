@@ -86,6 +86,13 @@ class WorkoutUpdateRequest(BaseModel):
     notes: str | None = None
 
 
+class SessionUpdateRequest(BaseModel):
+    """Update (or create) the session type for a specific date."""
+
+    session_type: str = Field(min_length=1)
+    notes: str | None = None
+
+
 class WorkoutSession(BaseModel):
     """A declared workout session for a calendar day (e.g. 'chest day', 'push day')."""
 
@@ -109,5 +116,5 @@ class AgentActionResponse(BaseModel):
 
 class APIResponse(BaseModel):
     success: bool
-    data: AgentActionResponse | list[WorkoutLogResponse] | list[WorkoutSession] | WorkoutLogResponse | None = None
+    data: AgentActionResponse | list[WorkoutLogResponse] | list[WorkoutSession] | WorkoutLogResponse | WorkoutSession | None = None
     error: str | None = None
