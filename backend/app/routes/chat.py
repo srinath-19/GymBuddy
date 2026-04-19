@@ -13,6 +13,7 @@ from ..agents.orchestrator import run_orchestrator
 from ..auth.dependencies import get_current_user
 from ..models.chat import ChatRequest
 from ..services.conversation import TurnLimitExceededError
+from ..services.pacer_session import PacerTurnLimitExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ async def chat(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Agent timed out.",
         )
-    except TurnLimitExceededError as e:
+    except (TurnLimitExceededError, PacerTurnLimitExceededError) as e:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(e),
