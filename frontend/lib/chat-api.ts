@@ -17,6 +17,14 @@ export interface ChatRequest {
   pacer_conversation_id?: string | null;
 }
 
+export interface PlanItem {
+  name: string;
+  target_sets: number;
+  target_reps: number;
+  sets_done: number;
+  finalized: boolean;
+}
+
 export interface PacerAPIResponse {
   conversation_id: string;
   turn_number: number;
@@ -28,6 +36,13 @@ export interface PacerAPIResponse {
   set_number: number | null;
   suggested_exercises: string[];
   logged_workout: WorkoutLogResponse | null;
+  // Session progress
+  total_exercises: number;
+  completed_exercises: number;
+  current_exercise_sets_done: number;
+  current_exercise_sets_total: number;
+  session_type: string | null;
+  current_plan: PlanItem[];
 }
 
 export interface ChatResponse {
