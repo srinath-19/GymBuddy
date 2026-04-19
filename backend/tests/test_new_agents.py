@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 import types
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -69,7 +69,7 @@ from backend.app.services.conversation import (
 
 # --- models ------------------------------------------------------------------
 from backend.app.models.pacer import PacerAgentOutput, PacerAPIResponse, PacerContext
-from backend.app.models.chat import ChatAPIResponse, ChatRequest, ChatResponse
+from backend.app.models.chat import ChatRequest, ChatResponse
 from backend.app.models.workout import (
     AgentActionResponse,
     MuscleTargetResponse,
@@ -185,7 +185,7 @@ class TestAppendTurn:
         before = entry["last_active"]
         # Tiny sleep alternative: manipulate last_active to a past value so we
         # can confirm it was updated.
-        entry["last_active"] = datetime.utcnow() - timedelta(seconds=5)
+        entry["last_active"] = datetime.now(timezone.utc) - timedelta(seconds=5)
         append_turn(cid, "msg", "reply")
         assert entry["last_active"] > before - timedelta(seconds=6)
 
@@ -236,7 +236,7 @@ class TestSweepExpired:
     def test_removes_expired_entries(self) -> None:
         cid, entry = get_or_create(None)
         # Force last_active far into the past
-        entry["last_active"] = datetime.utcnow() - CONVERSATION_TTL - timedelta(seconds=1)
+        entry["last_active"] = datetime.now(timezone.utc) - CONVERSATION_TTL - timedelta(seconds=1)
         sweep_expired()
         assert cid not in conv_module.conversations
 
@@ -249,7 +249,7 @@ class TestSweepExpired:
     def test_mixed_expired_and_fresh(self) -> None:
         cid_old, entry_old = get_or_create(None)
         cid_new, entry_new = get_or_create(None)
-        entry_old["last_active"] = datetime.utcnow() - CONVERSATION_TTL - timedelta(seconds=5)
+        entry_old["last_active"] = datetime.now(timezone.utc) - CONVERSATION_TTL - timedelta(seconds=5)
         sweep_expired()
         assert cid_old not in conv_module.conversations
         assert cid_new in conv_module.conversations
@@ -398,14 +398,14 @@ class TestPacerContext:
         uid = uuid.uuid4()
         ctx = PacerContext(user_id=uid)
         assert ctx.user_id == uid
-        assert ctx.logged_workout is None
+        assert ctx.logged_workouts == []
 
     def test_logged_workout_can_be_set(self) -> None:
         uid = uuid.uuid4()
         ctx = PacerContext(user_id=uid)
         workout = _make_workout_log_response()
-        ctx.logged_workout = workout
-        assert ctx.logged_workout is workout
+        ctx.logged_workouts.append(workout)
+        assert ctx.logged_workouts[-1] is workout
 
 
 # ===========================================================================
@@ -483,27 +483,6 @@ class TestChatResponse:
             ChatResponse(agent_type="unknown")  # type: ignore[arg-type]
 
 
-class TestChatAPIResponse:
-    def test_success_true_with_data(self) -> None:
-        action = AgentActionResponse(action="none", message="Nothing to do.")
-        chat_resp = ChatResponse(agent_type="workout", workout=action)
-        api_resp = ChatAPIResponse(success=True, data=chat_resp)
-        assert api_resp.success is True
-        assert api_resp.data is chat_resp
-        assert api_resp.error is None
-
-    def test_success_false_with_error(self) -> None:
-        api_resp = ChatAPIResponse(success=False, error="Something went wrong.")
-        assert api_resp.success is False
-        assert api_resp.data is None
-        assert api_resp.error == "Something went wrong."
-
-    def test_serializes_to_dict(self) -> None:
-        api_resp = ChatAPIResponse(success=True, data=None)
-        d = api_resp.model_dump()
-        assert "success" in d
-        assert "data" in d
-        assert "error" in d
 
 
 # ===========================================================================
@@ -536,11 +515,12 @@ class TestBuildPacerApiResponse:
         conv_id = "test-conv-id"
         turn_number = 2
 
+        from backend.app.services.pacer_session import PACER_MAX_TURNS
         result = build_pacer_api_response(output, context, conv_id, turn_number)
 
         assert result.conversation_id == conv_id
         assert result.turn_number == turn_number
-        assert result.max_turns == MAX_TURNS
+        assert result.max_turns == PACER_MAX_TURNS
         assert result.message == "Big set coming up!"
         assert result.phase == "active"
         assert result.rest_seconds is None
@@ -556,7 +536,7 @@ class TestBuildPacerApiResponse:
         output = self._make_output()
         context = PacerContext(user_id=uuid.uuid4())
         workout = _make_workout_log_response(exercise="deadlift", sets=1, reps=5, weight=225.0)
-        context.logged_workout = workout
+        context.logged_workouts.append(workout)
 
         result = build_pacer_api_response(output, context, "cid", 1)
 
@@ -566,7 +546,7 @@ class TestBuildPacerApiResponse:
     def test_logged_workout_none_when_context_has_none(self) -> None:
         output = self._make_output()
         context = PacerContext(user_id=uuid.uuid4())
-        # context.logged_workout is None by default
+        # context.logged_workouts is empty by default
 
         result = build_pacer_api_response(output, context, "cid", 1)
 
@@ -765,29 +745,19 @@ class TestInferMuscles:
 
 class TestPacerTurnLimitEnforcement:
     """
-    Known issue: is_at_limit is imported in workout_pacer.py but never called
-    inside run_pacer(). The pacer has NO turn limit enforcement — it will keep
-    running after MAX_TURNS turns.
-
-    This test documents the missing guard rather than testing it as working.
+    The pacer now uses its own session store (pacer_session.py) and enforces
+    turn limits via is_at_limit() inside run_pacer().
     """
 
-    def test_is_at_limit_imported_but_no_enforcement_in_run_pacer(self) -> None:
+    def test_run_pacer_calls_is_at_limit(self) -> None:
         """
-        Verify that is_at_limit is reachable from the workout_pacer module
-        namespace (i.e. it was imported) but that run_pacer's source code
-        does not contain the check.
+        Verify that run_pacer's source code contains the is_at_limit check.
+        This was a known missing guard that has now been fixed.
         """
         import inspect
         import backend.app.agents.workout_pacer as pacer_mod
 
-        # is_at_limit is imported into the module namespace
-        assert hasattr(pacer_mod, "is_at_limit"), (
-            "is_at_limit should be importable from workout_pacer module"
-        )
-
         source = inspect.getsource(pacer_mod.run_pacer)
-        assert "is_at_limit" not in source, (
-            "KNOWN ISSUE: is_at_limit is never called inside run_pacer — "
-            "the pacer has no turn limit guard."
+        assert "is_at_limit" in source, (
+            "run_pacer should call is_at_limit — the turn limit guard is now implemented."
         )
