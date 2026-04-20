@@ -6,8 +6,10 @@ import type {
   SpeechRecognitionEvent,
   SpeechRecognitionErrorEvent,
 } from "@/lib/speech-types";
-// Side-effect import to ensure the global Window augmentation is loaded
 import "@/lib/speech-types";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
@@ -15,9 +17,7 @@ interface VoiceInputProps {
   label?: string;
   placeholder?: string;
   submitLabel?: string;
-  /** Called right before manual speech recognition starts (e.g. to pause wake word) */
   onListenStart?: () => void;
-  /** Called when manual speech recognition ends (e.g. to resume wake word) */
   onListenEnd?: () => void;
 }
 
@@ -43,12 +43,10 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
   const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
-  // Keep a ref to the latest transcript so onend closure reads current value
   const transcriptRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Feature-detect on mount — useEffect is SSR-safe (client-only)
     const API = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     setSpeechSupported(API != null);
   }, []);
@@ -68,7 +66,6 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
-    // Notify parent to pause wake word listening
     onListenStart?.();
 
     const resetSilenceTimer = () => {
@@ -103,7 +100,6 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
         onTranscript(final);
         setInterimText("");
       }
-      // Notify parent to resume wake word listening
       onListenEnd?.();
     };
 
@@ -111,7 +107,6 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
       recognitionRef.current = null;
       setState("idle");
       setError(`Speech error: ${event.error}`);
-      // Resume wake word on error too
       onListenEnd?.();
     };
 
@@ -124,7 +119,6 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     recognitionRef.current?.stop();
   }, []);
 
-  // Expose startListening to parent components via ref
   useImperativeHandle(ref, () => ({
     startListening,
   }), [startListening]);
@@ -139,92 +133,62 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+    <div className="flex flex-col gap-4">
       {error && (
-        <p role="alert" style={{ color: "#dc2626", margin: 0 }}>
+        <p role="alert" className="text-red-400 m-0 text-sm">
           {error}
         </p>
       )}
 
       {speechSupported && (
-        <div>
-          <button
+        <div className="flex flex-col gap-2">
+          <Button
             type="button"
             onClick={state === "listening" ? stopListening : startListening}
             disabled={disabled}
-            aria-label={
-              state === "listening" ? "Stop recording" : "Start voice input"
-            }
-            style={{
-              padding: "0.75rem 1.5rem",
-              fontSize: "1rem",
-              backgroundColor: state === "listening" ? "#dc2626" : "#2563eb",
-              color: "white",
-              border: "none",
-              borderRadius: "0.5rem",
-              cursor: disabled ? "not-allowed" : "pointer",
-              opacity: disabled ? 0.6 : 1,
-            }}
+            aria-label={state === "listening" ? "Stop recording" : "Start voice input"}
+            className={cn(
+              "w-full text-base font-semibold transition-all",
+              state === "listening"
+                ? "bg-red-500/80 hover:bg-red-500 border border-red-400/50 text-white"
+                : "bg-blue-600/70 hover:bg-blue-600 border border-blue-400/50 text-white"
+            )}
           >
-            {state === "listening" ? "Stop" : "Speak"}
-          </button>
+            {state === "listening" ? "🎙 Stop" : "🎤 Speak"}
+          </Button>
 
           {interimText && (
-            <p
-              style={{
-                fontStyle: "italic",
-                color: "#6b7280",
-                marginTop: "0.5rem",
-                marginBottom: 0,
-              }}
-            >
+            <p className="italic text-white/50 text-sm mt-1 mb-0">
               {interimText}
             </p>
           )}
         </div>
       )}
 
-      {/* Text input — always visible; primary input for Firefox and keyboard users */}
-      <form onSubmit={handleTextSubmit}>
+      <form onSubmit={handleTextSubmit} className="flex flex-col gap-2">
         <label
           htmlFor="workout-text-input"
-          style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}
+          className="text-white/70 text-sm font-medium"
         >
           {label ?? (speechSupported ? "Or type your workout:" : "Describe your workout:")}
         </label>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <input
+        <div className="flex gap-2">
+          <Input
             id="workout-text-input"
             type="text"
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
             placeholder={placeholder}
             disabled={disabled}
-            style={{
-              flex: 1,
-              padding: "0.5rem 0.75rem",
-              fontSize: "1rem",
-              border: "1px solid #d1d5db",
-              borderRadius: "0.5rem",
-              outline: "none",
-            }}
+            className="glass-input flex-1 text-base"
           />
-          <button
+          <Button
             type="submit"
             disabled={disabled || !textInput.trim()}
-            style={{
-              padding: "0.5rem 1rem",
-              fontSize: "1rem",
-              backgroundColor: "#16a34a",
-              color: "white",
-              border: "none",
-              borderRadius: "0.5rem",
-              cursor: disabled || !textInput.trim() ? "not-allowed" : "pointer",
-              opacity: disabled || !textInput.trim() ? 0.6 : 1,
-            }}
+            className="bg-green-600/70 hover:bg-green-600 border border-green-400/50 text-white font-semibold"
           >
             {submitLabel}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

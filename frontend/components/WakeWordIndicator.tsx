@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { cn } from "@/lib/utils";
 
 interface WakeWordIndicatorProps {
   isListening: boolean;
@@ -10,11 +11,6 @@ interface WakeWordIndicatorProps {
   isSpeaking: boolean;
 }
 
-/**
- * Floating indicator showing wake-word listening state.
- * Shows a pulsing mic when listening, a green active state when
- * the wake word is detected, and the interim transcript.
- */
 export default function WakeWordIndicator({
   isListening,
   isActivated,
@@ -25,97 +21,48 @@ export default function WakeWordIndicator({
   if (!supported) return null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: "1.5rem",
-        right: "1.5rem",
-        zIndex: 999,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        gap: "0.5rem",
-        pointerEvents: "none",
-      }}
-    >
-      {/* Interim text bubble — shown when activated */}
+    <div className="fixed bottom-6 right-6 z-[999] flex flex-col items-end gap-2 pointer-events-none">
       {isActivated && interimText && (
-        <div
-          style={{
-            maxWidth: "280px",
-            padding: "0.5rem 0.75rem",
-            backgroundColor: "rgba(17, 24, 39, 0.9)",
-            color: "white",
-            fontSize: "0.8rem",
-            borderRadius: "0.625rem",
-            lineHeight: 1.4,
-            backdropFilter: "blur(8px)",
-            animation: "fadeIn 0.2s ease",
-          }}
-        >
+        <div className="glass max-w-[280px] px-3 py-2 text-white text-xs leading-snug animate-fadeIn">
           {interimText}
         </div>
       )}
 
-      {/* Mic indicator pill */}
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.4rem",
-          padding: "0.4rem 0.75rem",
-          borderRadius: "9999px",
-          backgroundColor: isActivated
-            ? "rgba(34, 197, 94, 0.15)"
+        className={cn(
+          "flex items-center gap-1.5 px-3 py-1.5 rounded-full backdrop-blur-lg border transition-all duration-300",
+          isActivated
+            ? "bg-green-500/15 border-green-400/40"
             : isSpeaking
-            ? "rgba(59, 130, 246, 0.1)"
+            ? "bg-blue-500/15 border-blue-400/30"
             : isListening
-            ? "rgba(17, 24, 39, 0.08)"
-            : "rgba(17, 24, 39, 0.05)",
-          border: `1px solid ${
-            isActivated
-              ? "rgba(34, 197, 94, 0.3)"
-              : isSpeaking
-              ? "rgba(59, 130, 246, 0.2)"
-              : "rgba(17, 24, 39, 0.1)"
-          }`,
-          backdropFilter: "blur(8px)",
-          transition: "all 0.3s ease",
-        }}
+            ? "bg-white/8 border-white/15"
+            : "bg-white/5 border-white/10"
+        )}
       >
-        {/* Pulsing dot */}
         <span
-          style={{
-            width: "8px",
-            height: "8px",
-            borderRadius: "50%",
-            backgroundColor: isActivated
-              ? "#22c55e"
+          className={cn(
+            "w-2 h-2 rounded-full",
+            isActivated
+              ? "bg-green-400 animate-pulse"
               : isSpeaking
-              ? "#3b82f6"
+              ? "bg-blue-400"
               : isListening
-              ? "#6b7280"
-              : "#d1d5db",
-            animation: isActivated
-              ? "pulse 1s ease-in-out infinite"
-              : isListening
-              ? "pulse 2s ease-in-out infinite"
-              : "none",
-          }}
+              ? "bg-white/50 animate-pulse"
+              : "bg-white/20"
+          )}
         />
         <span
-          style={{
-            fontSize: "0.7rem",
-            fontWeight: 600,
-            color: isActivated
-              ? "#15803d"
+          className={cn(
+            "text-[0.7rem] font-semibold tracking-wide",
+            isActivated
+              ? "text-green-300"
               : isSpeaking
-              ? "#2563eb"
+              ? "text-blue-300"
               : isListening
-              ? "#6b7280"
-              : "#9ca3af",
-            letterSpacing: "0.03em",
-          }}
+              ? "text-white/60"
+              : "text-white/30"
+          )}
         >
           {isActivated
             ? "Listening..."
@@ -127,16 +74,12 @@ export default function WakeWordIndicator({
         </span>
       </div>
 
-      {/* Inline CSS animations */}
       <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(1.3); }
-        }
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(4px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        .animate-fadeIn { animation: fadeIn 0.2s ease; }
       `}</style>
     </div>
   );

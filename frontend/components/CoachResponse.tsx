@@ -2,16 +2,17 @@
 
 import { ExerciseCoachResponse } from "@/lib/coach-api";
 import YouTubeEmbed from "./YouTubeEmbed";
+import { Button } from "@/components/ui/button";
 
 interface CoachResponseProps {
   response: ExerciseCoachResponse;
   onLogExercise: (name: string) => void;
 }
 
-const difficultyColor: Record<string, { bg: string; text: string; border: string }> = {
-  beginner:     { bg: "#dcfce7", text: "#166534", border: "#bbf7d0" },
-  intermediate: { bg: "#fef9c3", text: "#713f12", border: "#fde047" },
-  advanced:     { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" },
+const difficultyStyle: Record<string, string> = {
+  beginner:     "bg-green-500/20 text-green-300 border-green-500/40",
+  intermediate: "bg-yellow-500/20 text-yellow-300 border-yellow-500/40",
+  advanced:     "bg-red-500/20 text-red-300 border-red-500/40",
 };
 
 export default function CoachResponse({ response, onLogExercise }: CoachResponseProps) {
@@ -27,76 +28,63 @@ export default function CoachResponse({ response, onLogExercise }: CoachResponse
     message,
   } = response;
 
-  const diffStyle = difficulty ? difficultyColor[difficulty.toLowerCase()] : null;
+  const diffClass = difficulty ? (difficultyStyle[difficulty.toLowerCase()] ?? "bg-white/10 text-white/70 border-white/20") : null;
   const primaryMuscles = muscles_targeted.filter((m) => m.role === "primary");
   const secondaryMuscles = muscles_targeted.filter((m) => m.role === "secondary");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem", flexWrap: "wrap" }}>
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2 flex-wrap">
         <div>
           {equipment_name && (
-            <p style={{ margin: 0, fontSize: "0.75rem", color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <p className="m-0 text-xs text-violet-300/60 uppercase tracking-widest">
               {equipment_name}
             </p>
           )}
           {exercise_name && (
-            <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#111827" }}>
+            <h3 className="m-0 text-lg font-bold text-violet-50">
               {exercise_name}
             </h3>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
-          {diffStyle && difficulty && (
-            <span style={{
-              fontSize: "0.7rem", fontWeight: 600, padding: "0.15rem 0.55rem",
-              borderRadius: "9999px", border: `1px solid ${diffStyle.border}`,
-              backgroundColor: diffStyle.bg, color: diffStyle.text,
-              textTransform: "capitalize",
-            }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          {diffClass && difficulty && (
+            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border capitalize ${diffClass}`}>
               {difficulty}
             </span>
           )}
           {exercise_name && (
-            <button
+            <Button
+              size="sm"
               onClick={() => onLogExercise(exercise_name.toLowerCase())}
-              style={{
-                fontSize: "0.75rem", fontWeight: 600,
-                padding: "0.2rem 0.65rem",
-                backgroundColor: "#111827", color: "white",
-                border: "none", borderRadius: "0.375rem", cursor: "pointer",
-              }}
+              className="bg-white/10 hover:bg-white/20 border border-white/20 text-violet-100 text-xs font-semibold"
             >
               Log This Exercise
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       {/* Message */}
-      <p style={{ margin: 0, fontSize: "0.875rem", color: "#374151", lineHeight: 1.6 }}>
-        {message}
-      </p>
+      {message && (
+        <p className="m-0 text-sm text-violet-100/90 leading-relaxed">{message}</p>
+      )}
 
       {/* Muscles */}
       {muscles_targeted.length > 0 && (
         <div>
-          <p style={{ margin: "0 0 0.3rem", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Muscles
-          </p>
-          <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+          <p className="m-0 mb-1.5 text-xs font-semibold text-violet-300/60 uppercase tracking-widest">Muscles</p>
+          <div className="flex gap-1.5 flex-wrap">
             {primaryMuscles.map((m) => (
-              <span key={m.muscle_group} style={{
-                fontSize: "0.7rem", backgroundColor: "#dcfce7", color: "#166534",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #bbf7d0",
-              }}>{m.muscle_group}</span>
+              <span key={m.muscle_group} className="text-xs bg-green-500/20 text-green-300 border border-green-500/30 px-2 py-0.5 rounded-full">
+                {m.muscle_group}
+              </span>
             ))}
             {secondaryMuscles.map((m) => (
-              <span key={m.muscle_group} style={{
-                fontSize: "0.7rem", backgroundColor: "#f1f5f9", color: "#475569",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #e2e8f0",
-              }}>{m.muscle_group}</span>
+              <span key={m.muscle_group} className="text-xs bg-slate-500/20 text-slate-300 border border-slate-500/30 px-2 py-0.5 rounded-full">
+                {m.muscle_group}
+              </span>
             ))}
           </div>
         </div>
@@ -105,14 +93,10 @@ export default function CoachResponse({ response, onLogExercise }: CoachResponse
       {/* Instructions */}
       {instructions.length > 0 && (
         <div>
-          <p style={{ margin: "0 0 0.4rem", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            How To
-          </p>
-          <ol style={{ margin: 0, paddingLeft: "1.25rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+          <p className="m-0 mb-2 text-xs font-semibold text-violet-300/60 uppercase tracking-widest">How To</p>
+          <ol className="m-0 pl-5 flex flex-col gap-1.5">
             {instructions.map((step, i) => (
-              <li key={i} style={{ fontSize: "0.875rem", color: "#374151", lineHeight: 1.5 }}>
-                {step}
-              </li>
+              <li key={i} className="text-sm text-violet-100/85 leading-relaxed">{step}</li>
             ))}
           </ol>
         </div>
@@ -120,10 +104,10 @@ export default function CoachResponse({ response, onLogExercise }: CoachResponse
 
       {/* YouTube videos */}
       {videos.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <div className="flex flex-col gap-3">
           {videos.map((v) => (
             <div key={v.video_id}>
-              <p style={{ margin: "0 0 0.3rem", fontSize: "0.8rem", fontWeight: 500, color: "#374151" }}>{v.title}</p>
+              <p className="m-0 mb-1.5 text-sm font-medium text-violet-200/80">{v.title}</p>
               <YouTubeEmbed videoId={v.video_id} title={v.title} />
             </div>
           ))}
@@ -133,14 +117,10 @@ export default function CoachResponse({ response, onLogExercise }: CoachResponse
       {/* Common mistakes */}
       {common_mistakes.length > 0 && (
         <div>
-          <p style={{ margin: "0 0 0.4rem", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Common Mistakes
-          </p>
-          <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+          <p className="m-0 mb-2 text-xs font-semibold text-violet-300/60 uppercase tracking-widest">Common Mistakes</p>
+          <ul className="m-0 pl-5 flex flex-col gap-1.5">
             {common_mistakes.map((m, i) => (
-              <li key={i} style={{ fontSize: "0.875rem", color: "#374151", lineHeight: 1.5 }}>
-                {m}
-              </li>
+              <li key={i} className="text-sm text-violet-100/85 leading-relaxed">{m}</li>
             ))}
           </ul>
         </div>
@@ -148,14 +128,9 @@ export default function CoachResponse({ response, onLogExercise }: CoachResponse
 
       {/* Tips */}
       {tips.length > 0 && (
-        <div style={{
-          padding: "0.6rem 0.75rem",
-          backgroundColor: "#eff6ff",
-          border: "1px solid #bfdbfe",
-          borderRadius: "0.375rem",
-        }}>
+        <div className="glass-light px-3 py-2.5 border-blue-400/30">
           {tips.map((tip, i) => (
-            <p key={i} style={{ margin: i === 0 ? 0 : "0.25rem 0 0", fontSize: "0.8rem", color: "#1e40af", lineHeight: 1.5 }}>
+            <p key={i} className={`text-sm text-blue-200/90 leading-relaxed ${i === 0 ? "m-0" : "m-0 mt-1"}`}>
               {tip}
             </p>
           ))}

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import NavBar from "@/components/NavBar";
 import { serializePublicEnvForScript } from "@/lib/public-env";
+import { BGPattern } from "@/components/ui/bg-pattern";
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: "GymBuddy",
@@ -17,15 +19,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
   return (
     <html lang="en">
-      <body
-        style={{
-          margin: 0,
-          fontFamily:
-            "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          backgroundColor: "#f9fafb",
-          color: "#111827",
-        }}
-      >
+      <body className="relative">
+        <BGPattern
+          variant="diagonal-stripes"
+          mask="none"
+          size={28}
+          fill="rgba(139, 92, 246, 0.07)"
+          className="fixed"
+        />
         <script dangerouslySetInnerHTML={{ __html: publicEnvScript }} />
         <NavBar />
         {children}
