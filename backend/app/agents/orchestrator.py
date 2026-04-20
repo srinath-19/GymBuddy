@@ -20,6 +20,7 @@ from ..services.conversation import (
     is_at_limit,
     sweep_expired,
 )
+from ..services.pacer_session import PacerTurnLimitExceededError
 from pydantic import BaseModel
 
 CLASSIFIER_TIMEOUT_SECONDS = 10
@@ -110,6 +111,13 @@ async def _run_coach(
 
 async def run_orchestrator(req: ChatRequest, user_id: uuid.UUID) -> ChatResponse:
     agent_type = await _classify(req.text, bool(req.image_base64))
+
+    # If the user has an active pacer session and the classifier didn't pick coach
+    # (coach is unambiguous — always form/technique), force route to pacer.
+    # The classifier lacks session context so "remove bench", "done 10 at 135", etc.
+    # get misclassified as "workout" actions. Hard override fixes this.
+    if req.pacer_conversation_id and agent_type == "workout":
+        agent_type = "pacer"
 
     if agent_type == "workout":
         gym_context, message = await run_agent(req.text, user_id)

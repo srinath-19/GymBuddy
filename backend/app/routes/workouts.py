@@ -13,7 +13,7 @@ from ..auth.dependencies import get_current_user
 from ..cache.redis_client import (
     get_cached_sessions,
     get_cached_workouts,
-    invalidate_user,
+    invalidate_pr,
     set_cached_sessions,
     set_cached_workouts,
 )
@@ -43,6 +43,24 @@ from ..models.workout import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
+
+
+async def _populate_workouts_cache(user_id: UUID) -> None:
+    try:
+        async with get_session() as session:
+            fresh = await fetch_workouts(session, user_id=user_id, limit=50)
+        await set_cached_workouts(str(user_id), [r.model_dump(mode="json") for r in fresh])
+    except Exception:
+        logger.warning("Workouts cache populate failed for user %s", user_id)
+
+
+async def _populate_sessions_cache(user_id: UUID) -> None:
+    try:
+        async with get_session() as session:
+            fresh = await get_sessions(session, user_id, days=90)
+        await set_cached_sessions(str(user_id), [r.model_dump(mode="json") for r in fresh])
+    except Exception:
+        logger.warning("Sessions cache populate failed for user %s", user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +110,8 @@ async def create_workout_manual(
             detail="Database error",
         ) from exc
 
-    await invalidate_user(str(user_id))
+    await invalidate_pr(str(user_id), parsed.exercise)
+    await _populate_workouts_cache(user_id)
     return APIResponse(success=True, data=record)
 
 
@@ -127,7 +146,9 @@ async def create_workout(
         workouts=context.found_workouts or context.deleted_workouts or None,
         session=context.session,
     )
-    await invalidate_user(str(user_id))
+    if context.cache_dirty:
+        await _populate_workouts_cache(user_id)
+        await _populate_sessions_cache(user_id)
     return APIResponse(success=True, data=action_data)
 
 
@@ -247,7 +268,9 @@ async def edit_workout(
             detail="Database error",
         ) from exc
 
-    await invalidate_user(str(user_id))
+    if "exercise" in updates:
+        await invalidate_pr(str(user_id), updates["exercise"])
+    await _populate_workouts_cache(user_id)
     return APIResponse(success=True, data=record)
 
 
@@ -279,7 +302,7 @@ async def remove_workout(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workout not found")
 
-    await invalidate_user(str(user_id))
+    await _populate_workouts_cache(user_id)
     return APIResponse(success=True, data=record)
 
 
@@ -323,5 +346,5 @@ async def update_session(
             detail="Database error",
         ) from exc
 
-    await invalidate_user(str(user_id))
+    await _populate_sessions_cache(user_id)
     return APIResponse(success=True, data=record)

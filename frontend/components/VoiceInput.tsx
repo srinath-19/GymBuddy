@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // Web Speech API type declarations
@@ -64,15 +64,19 @@ interface VoiceInputProps {
   submitLabel?: string;
 }
 
+export interface VoiceInputHandle {
+  startListening: () => void;
+}
+
 type RecognitionState = "idle" | "listening";
 
-export default function VoiceInput({
+const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceInput({
   onTranscript,
   disabled = false,
   label,
   placeholder = "e.g. bench press 3x10 at 135 lbs",
   submitLabel = "Log",
-}: VoiceInputProps) {
+}, ref) {
   const [state, setState] = useState<RecognitionState>("idle");
   const [interimText, setInterimText] = useState("");
   const [textInput, setTextInput] = useState("");
@@ -153,6 +157,11 @@ export default function VoiceInput({
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     recognitionRef.current?.stop();
   }, []);
+
+  // Expose startListening to parent components via ref
+  useImperativeHandle(ref, () => ({
+    startListening,
+  }), [startListening]);
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -254,4 +263,6 @@ export default function VoiceInput({
       </form>
     </div>
   );
-}
+});
+
+export default VoiceInput;

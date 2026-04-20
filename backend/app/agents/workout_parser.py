@@ -7,6 +7,13 @@ from datetime import date as Date, timezone, datetime
 
 from agents import Agent, RunContextWrapper, Runner, function_tool
 
+from ..cache.redis_client import (
+    get_cached_pr,
+    get_cached_sessions,
+    get_cached_workouts,
+    invalidate_pr,
+    set_cached_pr,
+)
 from ..data.muscle_ai import infer_muscles
 from ..data.session_muscles import get_expected_muscles
 from ..db.database import get_session
@@ -42,6 +49,8 @@ class GymContext:
     found_workouts: list[WorkoutLogResponse] = field(default_factory=list)
     deleted_workouts: list[WorkoutLogResponse] = field(default_factory=list)
     session: WorkoutSession | None = None
+    # Set True by any write tool so subsequent READ tools in the same turn skip the cache
+    cache_dirty: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +108,8 @@ async def log_workout(
         targets = await insert_muscle_targets(session, record.id, muscle_data, "ai_inferred")
         record = record.model_copy(update={"is_personal_record": is_pr, "muscle_targets": targets})
 
+    await invalidate_pr(str(user_id), parsed.exercise)
+    ctx.context.cache_dirty = True
     ctx.context.action = "logged"
     ctx.context.logged_workout = record
 
@@ -112,6 +123,16 @@ async def get_last_workout(ctx: RunContextWrapper[GymContext]) -> str:
     Retrieve the user's most recently logged workout.
     Call this before delete_workout when the user says 'delete my last workout'.
     """
+    if not ctx.context.cache_dirty:
+        cached = await get_cached_workouts(str(ctx.context.user_id))
+        if cached:
+            w = cached[0]  # list is ordered DESC by logged_at
+            return (
+                f"Last workout: {w['exercise']} {w['sets']}×{w['reps']} "
+                f"@ {w['weight']} {w['weight_unit']} "
+                f"logged on {w['logged_at'][:10]} | id={w['id']}"
+            )
+
     async with get_session() as session:
         workouts = await fetch_workouts(session, ctx.context.user_id, limit=1)
     if not workouts:
@@ -143,6 +164,7 @@ async def delete_workout(ctx: RunContextWrapper[GymContext], workout_id: str) ->
     if deleted is None:
         return f"Workout {workout_id} not found or does not belong to you."
 
+    ctx.context.cache_dirty = True
     ctx.context.action = "deleted"
     ctx.context.deleted_workouts = [deleted]
     return (
@@ -201,6 +223,7 @@ async def update_workout_tool(
     if record is None:
         return f"Workout {workout_id} not found or does not belong to you."
 
+    ctx.context.cache_dirty = True
     ctx.context.action = "updated"
     ctx.context.logged_workout = record
 
@@ -281,6 +304,7 @@ async def start_workout_session(
             session_type=session_type.strip().lower(),
             notes=notes,
         )
+    ctx.context.cache_dirty = True
     ctx.context.action = "session_started"
     ctx.context.session = record
     label = "today" if target_date == today else str(target_date)
@@ -310,10 +334,24 @@ async def get_session_for_date_tool(
     else:
         target_date = today
 
+    date_key = str(target_date)
+    if not ctx.context.cache_dirty:
+        cached = await get_cached_sessions(str(ctx.context.user_id))
+        if cached is not None:
+            hit = next((s for s in cached if s.get("date") == date_key), None)
+            label = "today" if target_date == today else date_key
+            if hit is None:
+                return f"No session declared for {label}."
+            record = WorkoutSession.model_validate(hit)
+            ctx.context.action = "found"
+            ctx.context.session = record
+            notes_part = f" ({record.notes})" if record.notes else ""
+            return f"Session for {label}: {record.session_type}{notes_part}."
+
     async with get_session() as db:
         record = await get_session_for_date(db, ctx.context.user_id, target_date)
 
-    label = "today" if target_date == today else str(target_date)
+    label = "today" if target_date == today else date_key
     if record is None:
         return f"No session declared for {label}."
 
@@ -351,15 +389,35 @@ async def get_today_workouts(
     else:
         target_date = today
 
-    async with get_session() as db:
-        today_session = await get_session_for_date(db, ctx.context.user_id, target_date)
-        workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+    date_key = str(target_date)
+    today_session: WorkoutSession | None = None
+    workouts: list[WorkoutLogResponse] = []
+
+    if not ctx.context.cache_dirty:
+        cached_workouts = await get_cached_workouts(str(ctx.context.user_id))
+        cached_sessions = await get_cached_sessions(str(ctx.context.user_id))
+        if cached_workouts is not None and cached_sessions is not None:
+            workouts = [
+                WorkoutLogResponse.model_validate(w)
+                for w in cached_workouts
+                if w.get("logged_at", "")[:10] == date_key
+            ]
+            hit = next((s for s in cached_sessions if s.get("date") == date_key), None)
+            today_session = WorkoutSession.model_validate(hit) if hit else None
+        else:
+            async with get_session() as db:
+                today_session = await get_session_for_date(db, ctx.context.user_id, target_date)
+                workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+    else:
+        async with get_session() as db:
+            today_session = await get_session_for_date(db, ctx.context.user_id, target_date)
+            workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
 
     ctx.context.action = "found"
     ctx.context.found_workouts = workouts
     ctx.context.session = today_session
 
-    day_label = "today" if target_date == today else str(target_date)
+    day_label = "today" if target_date == today else date_key
 
     if not workouts:
         if today_session:
@@ -425,6 +483,7 @@ async def delete_exercise_today(
     if not deleted:
         return f"No '{exercise}' workouts found for {target_date}."
 
+    ctx.context.cache_dirty = True
     ctx.context.action = "deleted"
     ctx.context.deleted_workouts = deleted
     label = "today" if target_date == today else str(target_date)
@@ -454,11 +513,26 @@ async def get_workouts_for_date(
     else:
         target_date = today
 
-    async with get_session() as db:
-        workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+    date_key = str(target_date)
+    workouts: list[WorkoutLogResponse] = []
+    used_cache = False
 
+    if not ctx.context.cache_dirty:
+        cached = await get_cached_workouts(str(ctx.context.user_id))
+        if cached is not None:
+            workouts = [
+                WorkoutLogResponse.model_validate(w)
+                for w in cached
+                if w.get("logged_at", "")[:10] == date_key
+            ]
+            used_cache = True
+
+    if not used_cache or not workouts:
+        async with get_session() as db:
+            workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+
+    label = "today" if target_date == today else date_key
     if not workouts:
-        label = "today" if target_date == today else str(target_date)
         return f"No workouts found for {label}."
 
     ctx.context.action = "found"
@@ -468,7 +542,6 @@ async def get_workouts_for_date(
         f"{w.exercise} {w.sets}×{w.reps} @ {w.weight} {w.weight_unit} | id={w.id}"
         for w in workouts
     ]
-    label = "today" if target_date == today else str(target_date)
     return f"Workouts on {label} ({len(workouts)}):\n" + "\n".join(lines)
 
 
@@ -485,12 +558,24 @@ async def get_pr_for_exercise(
     Args:
         exercise: Exercise name or partial name to search for.
     """
+    uid = str(ctx.context.user_id)
+    cached_pr = await get_cached_pr(uid, exercise)
+    if cached_pr:
+        record = WorkoutLogResponse.model_validate(cached_pr)
+        ctx.context.action = "found"
+        ctx.context.found_workouts = [record]
+        return (
+            f"All-time PR on {record.exercise}: {record.weight} {record.weight_unit} "
+            f"({record.sets}\u00d7{record.reps}) — logged on {record.logged_at.date()}."
+        )
+
     async with get_session() as db:
         record = await get_exercise_pr(db, ctx.context.user_id, exercise)
 
     if record is None:
         return f"No '{exercise}' workouts found in your history."
 
+    await set_cached_pr(uid, exercise, record.model_dump(mode="json"))
     ctx.context.action = "found"
     ctx.context.found_workouts = [record]
     return (

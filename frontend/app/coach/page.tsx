@@ -181,7 +181,7 @@ export default function CoachPage() {
       const img = pendingImageRef.current;
       setPendingImage(null);
       const trimmed = voiceText.trim();
-      const LOG_INTENT = /\b(log\s+this|log\s+it|record\s+this|save\s+this)\b/i;
+      const LOG_INTENT = /\b(log\s+this|log\s+it|record\s+this|save\s+this|(?:i\s+(?:just\s+)?|just\s+)did\s+this(?:\s+exercise)?|done\s+this(?:\s+exercise)?)\b/i;
 
       if (LOG_INTENT.test(trimmed)) {
         let lastExercise: string | null = null;
