@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useRouter } from "next/navigation";
 import VoiceInput from "@/components/VoiceInput";
@@ -24,15 +24,23 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { useWakeWord } from "@/lib/useWakeWord";
 import { useTTS } from "@/lib/useTTS";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import { ParticleTextEffect } from "@/components/ui/particle-text-effect";
+
+const GYM_WORDS = [
+  "SQUAT", "DEADLIFT", "BENCH", "PRESS", "GAINS",
+  "PUMP", "GRIND", "FLEX", "REPS", "BEAST",
+  "PR", "SETS", "LIFT", "POWER", "SHRED",
+];
 
 type UIState = "idle" | "submitting" | "error";
 
-// ---------------------------------------------------------------------------
-// Day-grouping helper
-// ---------------------------------------------------------------------------
 type DayGroup = {
-  date: string;          // "YYYY-MM-DD"
-  label: string;         // "Wednesday, April 15"
+  date: string;
+  label: string;
   session: WorkoutSession | null;
   workouts: WorkoutLogResponse[];
 };
@@ -46,13 +54,12 @@ function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]):
     map.get(key)!.push(w);
   }
   const sessionMap = new Map(sessions.map((s) => [s.date, s]));
-  // Include session-only days (declared session but no exercises logged yet)
   for (const date of sessionMap.keys()) {
     if (!map.has(date)) map.set(date, []);
   }
   const groups: DayGroup[] = [];
   for (const [date, ws] of map) {
-    const d = new Date(date + "T12:00:00"); // noon UTC-safe parse
+    const d = new Date(date + "T12:00:00");
     groups.push({
       date,
       label: d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
@@ -63,12 +70,9 @@ function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]):
   return groups.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-// ---------------------------------------------------------------------------
-// Week bounds helper
-// ---------------------------------------------------------------------------
 function getWeekBounds(offset: number): { start: string; end: string; label: string } {
   const now = new Date();
-  const dow = now.getDay(); // 0=Sun
+  const dow = now.getDay();
   const toMonday = dow === 0 ? -6 : 1 - dow;
   const mon = new Date(now);
   mon.setDate(now.getDate() + toMonday + offset * 7);
@@ -94,26 +98,18 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
 
   if (action.action === "session_started" && action.session) {
     return (
-      <div role="status" style={{
-        marginTop: "1rem", padding: "1rem",
-        backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem",
-      }}>
+      <div role="status" className="glass-light mt-4 p-4">
         {action.message && (
-          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", fontWeight: 500, color: "#1e40af", lineHeight: 1.5 }}>{children}</p> }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p className="m-0 mb-2 text-sm font-medium text-blue-200 leading-relaxed">{children}</p> }}>
             {action.message}
           </ReactMarkdown>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-          <span style={{
-            fontSize: "0.7rem", fontWeight: 600,
-            backgroundColor: "#dbeafe", color: "#1d4ed8",
-            padding: "0.15rem 0.55rem", borderRadius: "9999px",
-            border: "1px solid #bfdbfe", textTransform: "capitalize",
-          }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge className="bg-blue-500/20 text-blue-200 border-blue-400/40 capitalize text-xs">
             {action.session.session_type}
-          </span>
+          </Badge>
           {action.session.notes && (
-            <em style={{ color: "#6b7280", fontSize: "0.8rem" }}>{action.session.notes}</em>
+            <em className="text-white/50 text-sm">{action.session.notes}</em>
           )}
         </div>
       </div>
@@ -122,55 +118,34 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
 
   if ((action.action === "logged" || action.action === "updated") && w) {
     return (
-      <div
-        role="status"
-        style={{
-          marginTop: "1rem",
-          padding: "1rem",
-          backgroundColor: "#f0fdf4",
-          border: "1px solid #86efac",
-          borderRadius: "0.5rem",
-        }}
-      >
+      <div role="status" className="glass-light mt-4 p-4 border-green-400/30">
         {action.message && (
-          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.6rem", fontSize: "0.9rem", fontWeight: 500, color: "#166534", lineHeight: 1.5 }}>{children}</p> }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p className="m-0 mb-2 text-sm font-medium text-green-200 leading-relaxed">{children}</p> }}>
             {action.message}
           </ReactMarkdown>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.8rem", color: "#374151" }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-white/80">
             {w.exercise} &mdash; {w.sets}&times;{w.reps} @ {w.weight} {w.weight_unit}
           </span>
-          {w.notes && <em style={{ color: "#6b7280", fontSize: "0.8rem" }}> ({w.notes})</em>}
+          {w.notes && <em className="text-white/50 text-sm">({w.notes})</em>}
           {w.is_personal_record && (
-            <span style={{
-              display: "inline-block",
-              backgroundColor: "#fef08a",
-              color: "#713f12",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-              padding: "0.1rem 0.5rem",
-              borderRadius: "9999px",
-              border: "1px solid #fde047",
-              whiteSpace: "nowrap",
-            }}>
-              New PR!
+            <span className="inline-flex items-center gap-1 bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-extrabold text-xs px-3 py-1 rounded-full shadow-[0_0_14px_rgba(251,191,36,0.7)] tracking-wide">
+              🏆 New PR!
             </span>
           )}
         </div>
         {w.muscle_targets.length > 0 && (
-          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+          <div className="mt-2 flex gap-1.5 flex-wrap">
             {w.muscle_targets.filter((t) => t.role === "primary").map((t) => (
-              <span key={t.muscle_group} style={{
-                fontSize: "0.7rem", backgroundColor: "#dcfce7", color: "#166534",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #bbf7d0",
-              }}>{t.muscle_group}</span>
+              <Badge key={t.muscle_group} className="bg-green-500/20 text-green-300 border-green-500/30 text-[0.65rem]">
+                {t.muscle_group}
+              </Badge>
             ))}
             {w.muscle_targets.filter((t) => t.role === "secondary").map((t) => (
-              <span key={t.muscle_group} style={{
-                fontSize: "0.7rem", backgroundColor: "#f1f5f9", color: "#475569",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #e2e8f0",
-              }}>{t.muscle_group}</span>
+              <Badge key={t.muscle_group} className="bg-slate-500/20 text-slate-300 border-slate-500/30 text-[0.65rem]">
+                {t.muscle_group}
+              </Badge>
             ))}
           </div>
         )}
@@ -180,11 +155,8 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
 
   if (action.action === "deleted") {
     return (
-      <div role="status" style={{
-        marginTop: "1rem", padding: "1rem",
-        backgroundColor: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "0.5rem",
-      }}>
-        <p style={{ margin: 0, fontSize: "0.9rem", fontWeight: 500, color: "#9a3412", lineHeight: 1.5 }}>
+      <div role="status" className="glass-light mt-4 p-4 border-orange-400/30">
+        <p className="m-0 text-sm font-medium text-orange-200 leading-relaxed">
           {action.message}
         </p>
       </div>
@@ -192,12 +164,8 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
   }
 
   if (action.action === "found" && action.workouts && action.workouts.length > 0) {
-    const expectedMuscles = action.session
-      ? getExpectedMuscles(action.session.session_type)
-      : [];
-    const requiredMuscles = action.session
-      ? getRequiredMuscles(action.session.session_type)
-      : [];
+    const expectedMuscles = action.session ? getExpectedMuscles(action.session.session_type) : [];
+    const requiredMuscles = action.session ? getRequiredMuscles(action.session.session_type) : [];
     const hitMuscles = new Set<string>(
       action.workouts.flatMap((w) =>
         w.muscle_targets.filter((t) => t.role === "primary").map((t) => t.muscle_group)
@@ -209,29 +177,19 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
       requiredMuscles.length > 0 && requiredMuscles.every((m) => hitMuscles.has(m));
 
     return (
-      <div role="status" style={{
-        marginTop: "1rem", padding: "1rem",
-        backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.5rem",
-      }}>
-        {/* LLM sentence summary — always shown at top (TTS-ready) */}
+      <div role="status" className="glass-light mt-4 p-4">
         {action.message && (
-          <ReactMarkdown components={{ p: ({ children }) => <p style={{ margin: "0 0 0.6rem", fontSize: "0.9rem", fontWeight: 500, color: "#1e293b", lineHeight: 1.5 }}>{children}</p> }}>
+          <ReactMarkdown components={{ p: ({ children }) => <p className="m-0 mb-2 text-sm font-medium text-white/90 leading-relaxed">{children}</p> }}>
             {action.message}
           </ReactMarkdown>
         )}
-        {/* Session badge + coverage label */}
         {action.session && (
-          <div style={{ marginBottom: "0.6rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-            <span style={{
-              fontSize: "0.7rem", fontWeight: 600,
-              backgroundColor: "#eff6ff", color: "#1d4ed8",
-              padding: "0.15rem 0.55rem", borderRadius: "9999px",
-              border: "1px solid #bfdbfe", textTransform: "capitalize",
-            }}>
+          <div className="mb-2 flex items-center gap-2 flex-wrap">
+            <Badge className="bg-blue-500/20 text-blue-200 border-blue-400/40 capitalize text-xs">
               {action.session.session_type}
-            </span>
+            </Badge>
             {expectedMuscles.length > 0 && (
-              <span style={{ fontSize: "0.75rem", color: "#6b7280" }}>
+              <span className="text-xs text-white/50">
                 {allRequiredCovered
                   ? "Session complete!"
                   : `${requiredMuscles.filter((m) => hitMuscles.has(m)).length}/${requiredMuscles.length} main muscles covered`}
@@ -239,33 +197,25 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
             )}
           </div>
         )}
-        {/* Muscle coverage pills */}
         {expectedMuscles.length > 0 && (
-          <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+          <div className="flex gap-1.5 flex-wrap mb-2">
             {coveredMuscles.map((m) => (
-              <span key={m} style={{
-                fontSize: "0.7rem", backgroundColor: "#dcfce7", color: "#166534",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #bbf7d0",
-              }}>{m}</span>
+              <Badge key={m} className="bg-green-500/20 text-green-300 border-green-500/30 text-[0.65rem]">{m}</Badge>
             ))}
             {missingMuscles.map((m) => (
-              <span key={m} style={{
-                fontSize: "0.7rem", backgroundColor: "#fff7ed", color: "#c2410c",
-                padding: "0.1rem 0.45rem", borderRadius: "9999px", border: "1px solid #fed7aa",
-              }}>{m}</span>
+              <Badge key={m} className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-[0.65rem]">{m}</Badge>
             ))}
           </div>
         )}
-        {/* Workout list */}
-        <div style={{ fontSize: "0.75rem", color: "#9ca3af", marginBottom: "0.3rem" }}>
+        <div className="text-xs text-white/30 mb-1">
           {action.workouts.length} workout{action.workouts.length !== 1 ? "s" : ""}
         </div>
-        <ul style={{ listStyle: "none", padding: 0, margin: "0.5rem 0 0", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+        <ul className="list-none p-0 m-0 flex flex-col gap-1 mt-2">
           {action.workouts.map((w) => (
-            <li key={w.id} style={{ fontSize: "0.875rem", color: "#374151" }}>
-              <span style={{ fontWeight: 600 }}>{w.exercise}</span>{" "}
-              <span style={{ color: "#6b7280" }}>{w.sets}&times;{w.reps} @ {w.weight} {w.weight_unit}</span>{" "}
-              <span style={{ color: "#9ca3af", fontSize: "0.75rem" }}>{new Date(w.logged_at).toLocaleDateString()}</span>
+            <li key={w.id} className="text-sm text-white/80">
+              <span className="font-semibold">{w.exercise}</span>{" "}
+              <span className="text-white/50">{w.sets}&times;{w.reps} @ {w.weight} {w.weight_unit}</span>{" "}
+              <span className="text-white/30 text-xs">{new Date(w.logged_at).toLocaleDateString()}</span>
             </li>
           ))}
         </ul>
@@ -275,11 +225,7 @@ function ActionCard({ action }: { action: AgentActionResponse }) {
 
   if (action.message) {
     return (
-      <div role="status" style={{
-        marginTop: "1rem", padding: "1rem",
-        backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.5rem",
-        color: "#374151", fontSize: "0.875rem",
-      }}>
+      <div role="status" className="glass-light mt-4 p-4 text-white/80 text-sm">
         {action.message}
       </div>
     );
@@ -298,7 +244,7 @@ interface WorkoutFormValues {
   weight: string;
   weight_unit: "lbs" | "kg";
   notes: string;
-  date: string;  // "YYYY-MM-DD"
+  date: string;
 }
 
 function blankForm(exercise = "", date?: string): WorkoutFormValues {
@@ -320,15 +266,6 @@ function fromWorkout(w: WorkoutLogResponse): WorkoutFormValues {
   };
 }
 
-const inputStyle: React.CSSProperties = {
-  padding: "0.35rem 0.5rem",
-  border: "1px solid #d1d5db",
-  borderRadius: "0.375rem",
-  fontSize: "0.875rem",
-  width: "100%",
-  boxSizing: "border-box",
-};
-
 interface WorkoutFormProps {
   initial: WorkoutFormValues;
   onSave: (values: WorkoutFormValues) => Promise<void>;
@@ -349,76 +286,60 @@ function WorkoutForm({ initial, onSave, onCancel, saving }: WorkoutFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.75rem" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.4rem" }}>
-        <input
-          style={inputStyle}
-          placeholder="Exercise (e.g. bench press)"
-          value={values.exercise}
-          onChange={(e) => set("exercise", e.target.value)}
-          required
-        />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.4rem" }}>
-          <input style={inputStyle} type="number" min={1} placeholder="Sets" value={values.sets}
-            onChange={(e) => set("sets", e.target.value)} required />
-          <input style={inputStyle} type="number" min={1} placeholder="Reps" value={values.reps}
-            onChange={(e) => set("reps", e.target.value)} required />
-          <input style={inputStyle} type="number" min={0} step="any" placeholder="Weight" value={values.weight}
-            onChange={(e) => set("weight", e.target.value)} required />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.4rem", alignItems: "center" }}>
-          <select
-            style={{ ...inputStyle, width: "auto" }}
-            value={values.weight_unit}
-            onChange={(e) => set("weight_unit", e.target.value as "lbs" | "kg")}
-          >
-            <option value="lbs">lbs</option>
-            <option value="kg">kg</option>
-          </select>
-          <input style={inputStyle} placeholder="Notes (optional)" value={values.notes}
-            onChange={(e) => set("notes", e.target.value)} />
-        </div>
-        <input
-          style={inputStyle}
-          type="date"
-          value={values.date}
-          onChange={(e) => set("date", e.target.value)}
-          required
-        />
+    <form onSubmit={handleSubmit} className="flex flex-col gap-2 mt-3">
+      <Input
+        className="glass-input"
+        placeholder="Exercise (e.g. bench press)"
+        value={values.exercise}
+        onChange={(e) => set("exercise", e.target.value)}
+        required
+      />
+      <div className="grid grid-cols-3 gap-2">
+        <Input className="glass-input" type="number" min={1} placeholder="Sets" value={values.sets}
+          onChange={(e) => set("sets", e.target.value)} required />
+        <Input className="glass-input" type="number" min={1} placeholder="Reps" value={values.reps}
+          onChange={(e) => set("reps", e.target.value)} required />
+        <Input className="glass-input" type="number" min={0} step="any" placeholder="Weight" value={values.weight}
+          onChange={(e) => set("weight", e.target.value)} required />
       </div>
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        <button
+      <div className="grid grid-cols-[auto_1fr] gap-2 items-center">
+        <select
+          className="glass-input rounded-lg px-2 py-1 text-sm"
+          value={values.weight_unit}
+          onChange={(e) => set("weight_unit", e.target.value as "lbs" | "kg")}
+        >
+          <option value="lbs">lbs</option>
+          <option value="kg">kg</option>
+        </select>
+        <Input className="glass-input" placeholder="Notes (optional)" value={values.notes}
+          onChange={(e) => set("notes", e.target.value)} />
+      </div>
+      <Input
+        className="glass-input"
+        type="date"
+        value={values.date}
+        onChange={(e) => set("date", e.target.value)}
+        required
+      />
+      <div className="flex gap-2">
+        <Button
           type="submit"
           disabled={saving}
-          style={{
-            padding: "0.35rem 0.85rem",
-            backgroundColor: "#111827",
-            color: "white",
-            border: "none",
-            borderRadius: "0.375rem",
-            fontSize: "0.875rem",
-            cursor: saving ? "not-allowed" : "pointer",
-            opacity: saving ? 0.6 : 1,
-          }}
+          className="bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm"
+          size="sm"
         >
           {saving ? "Saving…" : "Save"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
           onClick={onCancel}
           disabled={saving}
-          style={{
-            padding: "0.35rem 0.85rem",
-            backgroundColor: "transparent",
-            color: "#6b7280",
-            border: "1px solid #d1d5db",
-            borderRadius: "0.375rem",
-            fontSize: "0.875rem",
-            cursor: "pointer",
-          }}
+          className="text-white/50 hover:text-white text-sm"
+          size="sm"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -439,21 +360,17 @@ export default function HomePage() {
   const [lastAction, setLastAction] = useState<AgentActionResponse | null>(null);
   const [historyError, setHistoryError] = useState(false);
 
-  // Edit / delete state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [crudError, setCrudError] = useState<string | null>(null);
 
-  // Manual-add form (global top-level) + per-date add
   const [showManualForm, setShowManualForm] = useState(false);
   const [addForDate, setAddForDate] = useState<string | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
   const manualFormKey = useRef(0);
 
-  // Week navigation (0 = current week, -1 = last week, …)
   const [weekOffset, setWeekOffset] = useState(0);
 
-  // Inline session edit
   const [editSessionDate, setEditSessionDate] = useState<string | null>(null);
   const [editSessionInput, setEditSessionInput] = useState("");
   const [sessionSaving, setSessionSaving] = useState(false);
@@ -466,7 +383,6 @@ export default function HomePage() {
           router.replace("/login");
         } else {
           setUserEmail(data.session.user.email ?? null);
-          // Show stale data instantly; loadWorkouts will replace it in background
           try {
             const cw = sessionStorage.getItem("gymbuddy:workouts");
             const cs = sessionStorage.getItem("gymbuddy:sessions");
@@ -497,9 +413,6 @@ export default function HomePage() {
     if (ready) void loadWorkouts();
   }, [ready, loadWorkouts]);
 
-  // ---------------------------------------------------------------------------
-  // TTS — speak agent responses back to the user
-  // ---------------------------------------------------------------------------
   const tts = useTTS({
     voice: "echo",
     onStart: () => setTtsSuppressed(true),
@@ -507,9 +420,6 @@ export default function HomePage() {
   });
   const [ttsSuppressed, setTtsSuppressed] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Wake word — always-on listening for "Gym Buddy"
-  // ---------------------------------------------------------------------------
   const wakeWord = useWakeWord({
     onCommand: useCallback(
       (cmd: string) => {
@@ -521,23 +431,19 @@ export default function HomePage() {
     suppressed: ttsSuppressed || uiState === "submitting",
   });
 
-  // Ref to avoid circular dependency between handleTranscript and useWakeWord
   const handleTranscriptRef = useRef<(text: string) => void>(() => {});
 
-  // Voice / text agent submit — goes directly to the workout parser agent
   const handleTranscript = useCallback(
     async (text: string) => {
       setUiState("submitting");
       setErrorMessage(null);
       setLastAction(null);
-
       setStreamMessage("Understanding your request...");
       try {
         const result = await logWorkoutStreamed(text, (msg) => setStreamMessage(msg));
         setLastAction(result);
         setUiState("idle");
         setStreamMessage("");
-        // Speak the agent's response — use inline audio if available, else fetch TTS
         if (result.tts_audio_b64) {
           tts.speakFromBase64(result.tts_audio_b64);
         } else if (result.message) {
@@ -553,12 +459,10 @@ export default function HomePage() {
     [loadWorkouts, tts]
   );
 
-  // Keep ref in sync
   useEffect(() => {
     handleTranscriptRef.current = handleTranscript;
   }, [handleTranscript]);
 
-  // Delete a workout — optimistic: remove from state immediately
   const handleDelete = useCallback(
     async (id: string) => {
       setCrudError(null);
@@ -567,19 +471,16 @@ export default function HomePage() {
         await deleteWorkout(id);
       } catch (err) {
         setCrudError(err instanceof Error ? err.message : "Delete failed.");
-        await loadWorkouts(); // restore list on failure
+        await loadWorkouts();
       }
     },
     [loadWorkouts]
   );
 
-  // Save edits — apply form values to list immediately, correct with server response
   const handleEditSave = useCallback(
     async (id: string, values: WorkoutFormValues) => {
       setCrudError(null);
-      setEditingId(null); // close form immediately
-
-      // Optimistic: patch the list item right now with whatever the form has
+      setEditingId(null);
       const parsedSets = parseInt(values.sets, 10);
       const parsedReps = parseInt(values.reps, 10);
       const parsedWeight = parseFloat(values.weight);
@@ -598,7 +499,6 @@ export default function HomePage() {
             : w
         )
       );
-
       const payload: WorkoutUpdateRequest = {
         exercise: values.exercise.trim().toLowerCase() || undefined,
         sets: Number.isFinite(parsedSets) ? parsedSets : undefined,
@@ -609,31 +509,26 @@ export default function HomePage() {
       };
       try {
         await updateWorkout(id, payload);
-        // Full reload so every card reflects updated PR status (weight change can affect
-        // is_personal_record for all workouts of that exercise, not just this one)
         await loadWorkouts();
       } catch (err) {
         setCrudError(err instanceof Error ? err.message : "Update failed.");
-        setEditingId(id); // reopen form on failure
-        await loadWorkouts(); // restore original data
+        setEditingId(id);
+        await loadWorkouts();
       }
     },
     [loadWorkouts]
   );
 
-  // Manually add — insert a placeholder immediately, swap in the real entry on success
   const handleManualAdd = useCallback(
     async (values: WorkoutFormValues) => {
       setCrudError(null);
       manualFormKey.current += 1;
       setShowManualForm(false);
-      setAddForDate(null); // close whichever form triggered the save
+      setAddForDate(null);
       setManualSaving(true);
 
       const tempId = `pending-${Date.now()}`;
-      const optimisticDate = values.date
-        ? `${values.date}T00:00:00.000Z`
-        : new Date().toISOString();
+      const optimisticDate = values.date ? `${values.date}T00:00:00.000Z` : new Date().toISOString();
       const optimistic: WorkoutLogResponse = {
         id: tempId,
         user_id: null,
@@ -648,7 +543,7 @@ export default function HomePage() {
         is_personal_record: false,
         muscle_targets: [],
       };
-      setWorkouts((prev) => [optimistic, ...prev]); // show immediately
+      setWorkouts((prev) => [optimistic, ...prev]);
 
       const payload: ManualWorkoutRequest = {
         exercise: values.exercise.trim(),
@@ -661,11 +556,10 @@ export default function HomePage() {
       };
       try {
         await addWorkoutManually(payload);
-        // Full reload so every card reflects updated PR status
         await loadWorkouts();
       } catch (err) {
         setCrudError(err instanceof Error ? err.message : "Could not add workout.");
-        setWorkouts((prev) => prev.filter((w) => w.id !== tempId)); // remove placeholder
+        setWorkouts((prev) => prev.filter((w) => w.id !== tempId));
         setShowManualForm(true);
         await loadWorkouts();
       } finally {
@@ -702,78 +596,78 @@ export default function HomePage() {
   if (!ready) return null;
 
   return (
-    <main style={{ maxWidth: "720px", margin: "0 auto", padding: "2rem 1rem" }}>
+    <div className="flex justify-center items-start">
+      {/* Left particle strip — sits right beside the content column */}
+      <div className="hidden xl:block w-32 flex-shrink-0 sticky top-12 self-start h-[calc(100vh-3rem)] overflow-hidden opacity-40 pointer-events-none">
+        <ParticleTextEffect
+          words={GYM_WORDS}
+          canvasWidth={128}
+          canvasHeight={900}
+          fontSize="bold 32px Arial"
+          className="w-full"
+        />
+      </div>
+
+    <main className="flex-1 max-w-3xl px-4 py-8 relative z-10">
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
-        <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Workouts</h1>
-        <button
+      <div className="flex justify-between items-center mb-1">
+        <h1 className="text-3xl font-bold text-violet-50 m-0">Workouts</h1>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={handleSignOut}
-          style={{ fontSize: "0.875rem", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0.25rem 0.5rem" }}
+          className="text-white/50 hover:text-white text-sm"
         >
           Sign out
-        </button>
+        </Button>
       </div>
       {userEmail && (
-        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.25rem", marginBottom: "2rem" }}>
-          {userEmail}
-        </p>
+        <p className="text-violet-300/60 text-sm mt-1 mb-8">{userEmail}</p>
       )}
       {!userEmail && (
-        <p style={{ color: "#6b7280", marginTop: 0, marginBottom: "2rem" }}>
-          Speak or type your workout to log it instantly.
-        </p>
+        <p className="text-violet-200/60 mt-0 mb-8">Speak or type your workout to log it instantly.</p>
       )}
 
-      <div>
-
-      {/* Voice / text input */}
-      <section aria-label="Log a workout" style={{ marginBottom: "2.5rem" }}>
-        <VoiceInput onTranscript={handleTranscript} disabled={uiState === "submitting"} onListenStart={wakeWord.pause} onListenEnd={wakeWord.resume} />
+      {/* Voice / text input card */}
+      <section aria-label="Log a workout" className="glass p-5 mb-8">
+        <VoiceInput
+          onTranscript={handleTranscript}
+          disabled={uiState === "submitting"}
+          onListenStart={wakeWord.pause}
+          onListenEnd={wakeWord.resume}
+        />
 
         {uiState === "submitting" && (
-          <p style={{ color: "#6b7280", marginTop: "0.75rem" }}>
+          <p className="text-white/50 mt-3 mb-0 text-sm animate-pulse">
             {streamMessage || "Parsing and saving your workout..."}
           </p>
         )}
-
         {uiState === "error" && errorMessage && (
-          <p role="alert" style={{ color: "#dc2626", marginTop: "0.75rem" }}>{errorMessage}</p>
+          <p role="alert" className="text-red-400 mt-3 mb-0 text-sm">{errorMessage}</p>
         )}
-
         {lastAction && uiState === "idle" && <ActionCard action={lastAction} />}
       </section>
 
       {/* Workout history */}
       <section aria-label="Workout history">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-          <h2 style={{ fontSize: "1.25rem", fontWeight: 600, margin: 0 }}>Recent Workouts</h2>
-          <button
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold text-violet-100 m-0">Recent Workouts</h2>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => { setShowManualForm((v) => !v); setEditingId(null); }}
-            style={{
-              fontSize: "0.8rem",
-              color: showManualForm ? "#6b7280" : "#2563eb",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: "0.2rem 0.4rem",
-            }}
+            className={cn(
+              "text-sm",
+              showManualForm ? "text-white/40 hover:text-white/60" : "text-blue-300 hover:text-blue-200"
+            )}
           >
             {showManualForm ? "Cancel" : "+ Add manually"}
-          </button>
+          </Button>
         </div>
 
-        {/* Manual-add form */}
         {showManualForm && (
-          <div style={{
-            marginBottom: "1.25rem",
-            padding: "1rem",
-            backgroundColor: "#f8fafc",
-            border: "1px solid #e2e8f0",
-            borderRadius: "0.5rem",
-          }}>
-            <p style={{ margin: "0 0 0.5rem", fontWeight: 600, fontSize: "0.875rem", color: "#374151" }}>
-              Add workout manually
-            </p>
+          <div className="glass-light p-4 mb-5">
+            <p className="m-0 mb-2 font-semibold text-sm text-white/70">Add workout manually</p>
             <WorkoutForm
               key={manualFormKey.current}
               initial={blankForm()}
@@ -788,42 +682,34 @@ export default function HomePage() {
         {(() => {
           const { label } = getWeekBounds(weekOffset);
           return (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
-              <button
+            <div className="flex items-center gap-2 mb-4">
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setWeekOffset((w) => w - 1)}
-                style={{ fontSize: "0.8rem", color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0.2rem 0.4rem" }}
+                className="text-white/50 hover:text-white text-sm"
               >
                 ← Prev
-              </button>
-              <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", flex: 1, textAlign: "center" }}>
-                {label}
-              </span>
-              <button
+              </Button>
+              <span className="text-sm font-semibold text-white/70 flex-1 text-center">{label}</span>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setWeekOffset((w) => w + 1)}
                 disabled={weekOffset === 0}
-                style={{
-                  fontSize: "0.8rem", color: "#6b7280", background: "none", border: "none",
-                  cursor: weekOffset === 0 ? "default" : "pointer",
-                  padding: "0.2rem 0.4rem",
-                  opacity: weekOffset === 0 ? 0.35 : 1,
-                }}
+                className="text-white/50 hover:text-white text-sm disabled:opacity-30"
               >
                 Next →
-              </button>
+              </Button>
             </div>
           );
         })()}
 
         {crudError && (
-          <p role="alert" style={{ color: "#dc2626", marginBottom: "0.75rem", fontSize: "0.875rem" }}>
-            {crudError}
-          </p>
+          <p role="alert" className="text-red-400 mb-3 text-sm">{crudError}</p>
         )}
-
         {historyError && (
-          <p role="alert" style={{ color: "#b45309", marginBottom: "0.75rem" }}>
-            Could not load workout history. Is the backend running?
-          </p>
+          <p role="alert" className="text-yellow-400 mb-3">Could not load workout history. Is the backend running?</p>
         )}
 
         {!historyError && (() => {
@@ -832,235 +718,183 @@ export default function HomePage() {
             (g) => g.date >= start && g.date <= end
           );
           return weekGroups.length === 0 ? (
-            <p style={{ color: "#9ca3af" }}>No workouts this week.</p>
+            <p className="text-white/30">No workouts this week.</p>
           ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-            {weekGroups.map((group) => (
-              <div key={group.date}>
-                {/* Day header */}
-                <div style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "0.4rem 0.75rem",
-                  backgroundColor: "#f8fafc",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: "0.375rem",
-                  marginBottom: "0.5rem",
-                }}>
-                  <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>
-                    {group.label}
-                  </span>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                    {/* Session badge / inline session edit */}
-                    {editSessionDate === group.date ? (
-                      <form
-                        onSubmit={(e) => { e.preventDefault(); handleSessionSave(group.date, editSessionInput); }}
-                        style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}
-                      >
-                        <input
-                          autoFocus
-                          value={editSessionInput}
-                          onChange={(e) => setEditSessionInput(e.target.value)}
-                          placeholder="e.g. push, legs, chest"
-                          disabled={sessionSaving}
-                          style={{
-                            padding: "0.15rem 0.4rem", fontSize: "0.7rem",
-                            border: "1px solid #93c5fd", borderRadius: "0.25rem",
-                            width: "9rem", outline: "none",
-                          }}
-                        />
-                        <button type="submit" disabled={sessionSaving || !editSessionInput.trim()}
-                          style={{ fontSize: "0.65rem", color: "#1d4ed8", background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem" }}>
-                          {sessionSaving ? "…" : "Save"}
+            <div className="flex flex-col gap-5">
+              {weekGroups.map((group) => (
+                <div key={group.date}>
+                  {/* Day header */}
+                  <div className="glass flex items-center justify-between px-3 py-2 mb-2 rounded-xl">
+                    <span className="text-sm font-semibold text-white/70 uppercase tracking-wide">
+                      {group.label}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {editSessionDate === group.date ? (
+                        <form
+                          onSubmit={(e) => { e.preventDefault(); handleSessionSave(group.date, editSessionInput); }}
+                          className="flex gap-1 items-center"
+                        >
+                          <Input
+                            autoFocus
+                            value={editSessionInput}
+                            onChange={(e) => setEditSessionInput(e.target.value)}
+                            placeholder="push, legs, chest…"
+                            disabled={sessionSaving}
+                            className="glass-input py-0.5 px-2 text-xs h-6 w-32"
+                          />
+                          <button type="submit" disabled={sessionSaving || !editSessionInput.trim()}
+                            className="text-[0.65rem] text-blue-300 bg-transparent border-none cursor-pointer px-1">
+                            {sessionSaving ? "…" : "Save"}
+                          </button>
+                          <button type="button" onClick={() => setEditSessionDate(null)} disabled={sessionSaving}
+                            className="text-[0.65rem] text-white/30 bg-transparent border-none cursor-pointer px-1">
+                            Cancel
+                          </button>
+                        </form>
+                      ) : group.session ? (
+                        <button
+                          onClick={() => { setEditSessionDate(group.date); setEditSessionInput(group.session!.session_type); }}
+                          title="Edit session"
+                          className="text-xs font-semibold bg-blue-500/20 text-blue-200 border border-blue-400/40 px-2.5 py-0.5 rounded-full capitalize cursor-pointer hover:bg-blue-500/30 transition-colors"
+                        >
+                          {group.session.session_type} ✎
                         </button>
-                        <button type="button" onClick={() => setEditSessionDate(null)} disabled={sessionSaving}
-                          style={{ fontSize: "0.65rem", color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem" }}>
-                          Cancel
+                      ) : (
+                        <button
+                          onClick={() => { setEditSessionDate(group.date); setEditSessionInput(""); }}
+                          title="Set session type"
+                          className="text-xs text-white/30 bg-transparent border-none cursor-pointer hover:text-white/60 transition-colors"
+                        >
+                          + session
                         </button>
-                      </form>
-                    ) : group.session ? (
+                      )}
                       <button
-                        onClick={() => { setEditSessionDate(group.date); setEditSessionInput(group.session!.session_type); }}
-                        title="Edit session"
-                        style={{
-                          fontSize: "0.7rem", fontWeight: 600,
-                          backgroundColor: "#eff6ff", color: "#1d4ed8",
-                          padding: "0.1rem 0.55rem", borderRadius: "9999px",
-                          border: "1px solid #bfdbfe", textTransform: "capitalize",
-                          cursor: "pointer",
-                        }}
+                        onClick={() => setAddForDate(addForDate === group.date ? null : group.date)}
+                        title="Add workout for this day"
+                        className={cn(
+                          "text-base font-bold bg-transparent border-none cursor-pointer leading-none px-1 transition-colors",
+                          addForDate === group.date ? "text-white/40" : "text-blue-300 hover:text-blue-200"
+                        )}
                       >
-                        {group.session.session_type} ✎
+                        {addForDate === group.date ? "✕" : "+"}
                       </button>
-                    ) : (
-                      <button
-                        onClick={() => { setEditSessionDate(group.date); setEditSessionInput(""); }}
-                        title="Set session type"
-                        style={{
-                          fontSize: "0.7rem", color: "#9ca3af",
-                          background: "none", border: "none", cursor: "pointer", padding: "0.1rem 0.25rem",
-                        }}
+                    </div>
+                  </div>
+
+                  {/* Per-date manual-add form */}
+                  {addForDate === group.date && (
+                    <div className="glass-light p-4 mb-3">
+                      <p className="m-0 mb-1 font-semibold text-xs text-white/60">
+                        Add workout — {group.label}
+                      </p>
+                      <WorkoutForm
+                        key={`${manualFormKey.current}-${group.date}`}
+                        initial={blankForm("", group.date)}
+                        onSave={handleManualAdd}
+                        onCancel={() => setAddForDate(null)}
+                        saving={manualSaving}
+                      />
+                    </div>
+                  )}
+
+                  {/* Workout cards */}
+                  <ul className="list-none p-0 m-0 flex flex-col gap-2">
+                    {group.workouts.map((w) => (
+                      <li
+                        key={w.id}
+                        className={cn(
+                          "p-4 hover:brightness-110 transition-all",
+                          w.is_personal_record ? "glass-pr" : "glass"
+                        )}
                       >
-                        + session
-                      </button>
-                    )}
-                    {/* Per-date add workout button */}
-                    <button
-                      onClick={() => setAddForDate(addForDate === group.date ? null : group.date)}
-                      title="Add workout for this day"
-                      style={{
-                        fontSize: "0.8rem", fontWeight: 600,
-                        color: addForDate === group.date ? "#6b7280" : "#2563eb",
-                        background: "none", border: "none", cursor: "pointer",
-                        padding: "0.1rem 0.3rem", lineHeight: 1,
-                      }}
-                    >
-                      {addForDate === group.date ? "✕" : "+"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Per-date manual-add form */}
-                {addForDate === group.date && (
-                  <div style={{
-                    marginBottom: "0.75rem", padding: "0.875rem",
-                    backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.5rem",
-                  }}>
-                    <p style={{ margin: "0 0 0.4rem", fontWeight: 600, fontSize: "0.8rem", color: "#374151" }}>
-                      Add workout — {group.label}
-                    </p>
-                    <WorkoutForm
-                      key={`${manualFormKey.current}-${group.date}`}
-                      initial={blankForm("", group.date)}
-                      onSave={handleManualAdd}
-                      onCancel={() => setAddForDate(null)}
-                      saving={manualSaving}
-                    />
-                  </div>
-                )}
-
-                {/* Workout cards for this day */}
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                  {group.workouts.map((w) => (
-                    <li
-                      key={w.id}
-                      style={{
-                        padding: "0.875rem 1rem",
-                        backgroundColor: "white",
-                        border: w.is_personal_record ? "1px solid #fde047" : "1px solid #e5e7eb",
-                        borderRadius: "0.5rem",
-                      }}
-                    >
-                      {/* Card header row */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 600 }}>{w.exercise}</span>
-                            <span style={{ color: "#6b7280" }}>
-                              {w.sets}&times;{w.reps} @ {w.weight} {w.weight_unit}
-                            </span>
-                            {w.is_personal_record && (
-                              <span style={{
-                                fontSize: "0.7rem", fontWeight: 700,
-                                backgroundColor: "#fef08a", color: "#713f12",
-                                padding: "0.1rem 0.45rem", borderRadius: "9999px",
-                                border: "1px solid #fde047", whiteSpace: "nowrap",
-                              }}>
-                                PR
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn(
+                                "font-semibold capitalize",
+                                w.is_personal_record ? "text-amber-200 text-base" : "text-violet-100"
+                              )}>{w.exercise}</span>
+                              <span className="text-violet-200/70 text-sm">
+                                {w.sets}&times;{w.reps} @ {w.weight} {w.weight_unit}
                               </span>
+                              {w.is_personal_record && (
+                                <span className="inline-flex items-center gap-1 bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-extrabold text-xs px-3 py-1 rounded-full shadow-[0_0_14px_rgba(251,191,36,0.7)] tracking-wide">
+                                  🏆 PR
+                                </span>
+                              )}
+                            </div>
+                            {w.notes && editingId !== w.id && (
+                              <p className="text-sm text-white/40 mt-1 mb-0">{w.notes}</p>
+                            )}
+                            {w.muscle_targets.length > 0 && editingId !== w.id && (
+                              <div className="mt-2 flex gap-1 flex-wrap">
+                                {w.muscle_targets.filter((t) => t.role === "primary").map((t) => (
+                                  <span
+                                    key={t.muscle_group}
+                                    title={t.specific_muscles.join(", ")}
+                                    className="text-[0.65rem] bg-green-500/15 text-green-300 border border-green-500/25 px-1.5 py-0.5 rounded-full cursor-default"
+                                  >
+                                    {t.muscle_group}
+                                  </span>
+                                ))}
+                                {w.muscle_targets.filter((t) => t.role === "secondary").map((t) => (
+                                  <span
+                                    key={t.muscle_group}
+                                    title={t.specific_muscles.join(", ")}
+                                    className="text-[0.65rem] bg-slate-500/15 text-slate-300 border border-slate-500/25 px-1.5 py-0.5 rounded-full cursor-default"
+                                  >
+                                    {t.muscle_group}
+                                  </span>
+                                ))}
+                              </div>
                             )}
                           </div>
-                          {w.notes && editingId !== w.id && (
-                            <p style={{ fontSize: "0.875rem", color: "#9ca3af", margin: "0.25rem 0 0" }}>{w.notes}</p>
-                          )}
-                          {w.muscle_targets.length > 0 && editingId !== w.id && (
-                            <div style={{ marginTop: "0.35rem", display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                              {w.muscle_targets.filter((t) => t.role === "primary").map((t) => (
-                                <span
-                                  key={t.muscle_group}
-                                  title={t.specific_muscles.join(", ")}
-                                  style={{
-                                    fontSize: "0.65rem", backgroundColor: "#f0fdf4", color: "#166534",
-                                    padding: "0.05rem 0.4rem", borderRadius: "9999px",
-                                    border: "1px solid #bbf7d0", cursor: "default",
-                                  }}
-                                >
-                                  {t.muscle_group}
-                                </span>
-                              ))}
-                              {w.muscle_targets.filter((t) => t.role === "secondary").map((t) => (
-                                <span
-                                  key={t.muscle_group}
-                                  title={t.specific_muscles.join(", ")}
-                                  style={{
-                                    fontSize: "0.65rem", backgroundColor: "#f1f5f9", color: "#475569",
-                                    padding: "0.05rem 0.4rem", borderRadius: "9999px",
-                                    border: "1px solid #e2e8f0", cursor: "default",
-                                  }}
-                                >
-                                  {t.muscle_group}
-                                </span>
-                              ))}
-                            </div>
-                          )}
+
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <time dateTime={w.logged_at} className="text-xs text-white/30 whitespace-nowrap">
+                              {new Date(w.logged_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                            </time>
+                            <button
+                              aria-label={`Edit ${w.exercise}`}
+                              onClick={() => setEditingId(editingId === w.id ? null : w.id)}
+                              title="Edit"
+                              className={cn(
+                                "bg-transparent border-none cursor-pointer text-sm px-1.5 py-0.5 leading-none transition-colors rounded",
+                                editingId === w.id ? "text-blue-300" : "text-white/30 hover:text-white/70"
+                              )}
+                            >
+                              ✎
+                            </button>
+                            <button
+                              aria-label={`Delete ${w.exercise}`}
+                              onClick={() => handleDelete(w.id)}
+                              disabled={deletingId === w.id}
+                              title="Delete"
+                              className="bg-transparent border-none cursor-pointer text-red-400/70 hover:text-red-400 text-sm px-1.5 py-0.5 leading-none transition-colors rounded disabled:opacity-40"
+                            >
+                              ✕
+                            </button>
+                          </div>
                         </div>
 
-                        {/* Actions: time + edit + delete */}
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", flexShrink: 0 }}>
-                          <time dateTime={w.logged_at} style={{ fontSize: "0.75rem", color: "#9ca3af", whiteSpace: "nowrap" }}>
-                            {new Date(w.logged_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-                          </time>
-                          <button
-                            aria-label={`Edit ${w.exercise}`}
-                            onClick={() => setEditingId(editingId === w.id ? null : w.id)}
-                            style={{
-                              background: "none", border: "none", cursor: "pointer",
-                              color: editingId === w.id ? "#2563eb" : "#9ca3af",
-                              fontSize: "0.8rem", padding: "0.15rem 0.3rem", lineHeight: 1,
-                            }}
-                            title="Edit"
-                          >
-                            ✎
-                          </button>
-                          <button
-                            aria-label={`Delete ${w.exercise}`}
-                            onClick={() => handleDelete(w.id)}
-                            disabled={deletingId === w.id}
-                            style={{
-                              background: "none", border: "none",
-                              cursor: deletingId === w.id ? "not-allowed" : "pointer",
-                              color: "#f87171", fontSize: "0.8rem",
-                              padding: "0.15rem 0.3rem", lineHeight: 1,
-                              opacity: deletingId === w.id ? 0.5 : 1,
-                            }}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline edit form */}
-                      {editingId === w.id && (
-                        <WorkoutForm
-                          initial={fromWorkout(w)}
-                          onSave={(values) => handleEditSave(w.id, values)}
-                          onCancel={() => setEditingId(null)}
-                          saving={false}
-                        />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+                        {editingId === w.id && (
+                          <WorkoutForm
+                            initial={fromWorkout(w)}
+                            onSave={(values) => handleEditSave(w.id, values)}
+                            onCancel={() => setEditingId(null)}
+                            saving={false}
+                          />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           );
         })()}
       </section>
 
-      </div>{/* end content */}
-
-      {/* Wake word always-listening indicator */}
       <WakeWordIndicator
         isListening={wakeWord.isListening}
         isActivated={wakeWord.isActivated}
@@ -1069,5 +903,17 @@ export default function HomePage() {
         isSpeaking={tts.isSpeaking}
       />
     </main>
+
+      {/* Right particle strip — sits right beside the content column */}
+      <div className="hidden xl:block w-32 flex-shrink-0 sticky top-12 self-start h-[calc(100vh-3rem)] overflow-hidden opacity-40 pointer-events-none">
+        <ParticleTextEffect
+          words={[...GYM_WORDS].reverse()}
+          canvasWidth={128}
+          canvasHeight={900}
+          fontSize="bold 32px Arial"
+          className="w-full"
+        />
+      </div>
+    </div>
   );
 }

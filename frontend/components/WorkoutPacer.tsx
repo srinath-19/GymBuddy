@@ -4,21 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import type { PacerAPIResponse, PlanItem } from "@/lib/chat-api";
 import type { PacerManualAction } from "@/lib/pacer-api";
 import type { MuscleTargetResponse } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface WorkoutPacerProps {
   response: PacerAPIResponse;
   onAction: (action: PacerManualAction) => void;
 }
 
-const phaseColors: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  planning: { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe", label: "Planning" },
-  active:   { bg: "#f0fdf4", text: "#15803d", border: "#bbf7d0", label: "Active"   },
-  resting:  { bg: "#fefce8", text: "#a16207", border: "#fde68a", label: "Resting"  },
-  done:     { bg: "#f3f4f6", text: "#374151", border: "#d1d5db", label: "Done"     },
+const phaseStyle: Record<string, { badge: string; label: string }> = {
+  planning: { badge: "bg-blue-500/20 text-blue-200 border-blue-400/40",   label: "Planning" },
+  active:   { badge: "bg-green-500/20 text-green-200 border-green-400/40", label: "Active"   },
+  resting:  { badge: "bg-yellow-500/20 text-yellow-200 border-yellow-400/40", label: "Resting" },
+  done:     { badge: "bg-white/10 text-white/50 border-white/20",          label: "Done"     },
 };
 
 // ---------------------------------------------------------------------------
-// Inline plan editor — shown during planning phase
+// Inline plan editor
 // ---------------------------------------------------------------------------
 
 function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerManualAction) => void }) {
@@ -44,56 +45,48 @@ function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerM
 
   return (
     <div>
-      <p style={{ margin: "0 0 0.4rem", fontSize: "0.75rem", fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-        Workout Plan
-      </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+      <p className="m-0 mb-2 text-xs font-bold text-violet-300/60 uppercase tracking-widest">Workout Plan</p>
+      <div className="flex flex-col gap-1">
         {plan.map((item, i) => (
-          <div key={i} style={{
-            display: "flex", alignItems: "center", gap: "0.5rem",
-            padding: "0.35rem 0.5rem", borderRadius: "0.375rem",
-            backgroundColor: item.finalized ? "#f0fdf4" : "#f9fafb",
-            border: `1px solid ${item.finalized ? "#bbf7d0" : "#e5e7eb"}`,
-            opacity: item.finalized ? 0.6 : 1,
-          }}>
-            {/* Index */}
-            <span style={{ fontSize: "0.7rem", color: "#9ca3af", width: "1rem", textAlign: "center", flexShrink: 0 }}>
+          <div
+            key={i}
+            className={cn(
+              "flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-opacity",
+              item.finalized
+                ? "bg-green-500/10 border-green-500/25 opacity-60"
+                : "bg-white/5 border-white/10"
+            )}
+          >
+            <span className="text-xs text-violet-300/50 w-4 text-center flex-shrink-0">
               {item.finalized ? "✓" : i + 1}
             </span>
+            <span className="flex-1 text-sm text-violet-100 capitalize">{item.name}</span>
 
-            {/* Name */}
-            <span style={{ flex: 1, fontSize: "0.875rem", color: "#111827", textTransform: "capitalize" }}>
-              {item.name}
-            </span>
-
-            {/* Inline sets×reps editor */}
             {!item.finalized && editIdx === i ? (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <div className="flex items-center gap-1">
                 <input
                   type="number" min={1} max={20} value={editSets}
                   onChange={(e) => setEditSets(e.target.value)}
-                  style={{ width: "2.5rem", fontSize: "0.8rem", padding: "0.15rem 0.3rem", borderRadius: "0.25rem", border: "1px solid #d1d5db", textAlign: "center" }}
+                  className="glass-input w-10 text-xs text-center rounded py-0.5 px-1"
                 />
-                <span style={{ fontSize: "0.7rem", color: "#6b7280" }}>×</span>
+                <span className="text-xs text-violet-300/50">×</span>
                 <input
                   type="number" min={1} max={50} value={editReps}
                   onChange={(e) => setEditReps(e.target.value)}
-                  style={{ width: "2.5rem", fontSize: "0.8rem", padding: "0.15rem 0.3rem", borderRadius: "0.25rem", border: "1px solid #d1d5db", textAlign: "center" }}
+                  className="glass-input w-10 text-xs text-center rounded py-0.5 px-1"
                 />
-                <button onClick={() => commitEdit(item)} style={btnStyle("#15803d", "#dcfce7")}>✓</button>
-                <button onClick={() => setEditIdx(null)} style={btnStyle("#6b7280", "#f3f4f6")}>✕</button>
+                <button onClick={() => commitEdit(item)} className="text-xs text-green-300 bg-green-500/20 border border-green-500/30 px-1.5 py-0.5 rounded cursor-pointer">✓</button>
+                <button onClick={() => setEditIdx(null)} className="text-xs text-white/40 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded cursor-pointer">✕</button>
               </div>
             ) : (
               <>
                 <span
                   onClick={() => !item.finalized && openEdit(i, item)}
                   title={item.finalized ? undefined : "Click to edit sets/reps"}
-                  style={{
-                    fontSize: "0.75rem", color: "#6b7280", whiteSpace: "nowrap",
-                    cursor: item.finalized ? "default" : "pointer",
-                    padding: "0.1rem 0.25rem", borderRadius: "0.25rem",
-                    border: item.finalized ? "none" : "1px dashed #d1d5db",
-                  }}
+                  className={cn(
+                    "text-xs text-violet-200/60 whitespace-nowrap px-1.5 py-0.5 rounded",
+                    !item.finalized && "border border-dashed border-white/20 cursor-pointer hover:border-white/40"
+                  )}
                 >
                   {item.target_sets}×{item.target_reps}
                 </span>
@@ -101,7 +94,7 @@ function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerM
                   <button
                     onClick={() => onAction({ type: "plan-remove", exercise_name: item.name })}
                     title="Remove"
-                    style={btnStyle("#dc2626", "#fee2e2")}
+                    className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded cursor-pointer hover:bg-red-500/20"
                   >
                     ✕
                   </button>
@@ -112,8 +105,7 @@ function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerM
         ))}
       </div>
 
-      {/* Add exercise row */}
-      <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
+      <div className="flex gap-2 mt-2">
         <input
           type="text"
           placeholder="Add exercise…"
@@ -125,10 +117,7 @@ function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerM
               setAddName("");
             }
           }}
-          style={{
-            flex: 1, fontSize: "0.8rem", padding: "0.3rem 0.5rem",
-            borderRadius: "0.375rem", border: "1px solid #d1d5db",
-          }}
+          className="glass-input flex-1 text-sm rounded-lg px-2 py-1"
         />
         <button
           onClick={() => {
@@ -137,7 +126,7 @@ function PlanEditor({ plan, onAction }: { plan: PlanItem[]; onAction: (a: PacerM
               setAddName("");
             }
           }}
-          style={btnStyle("#1d4ed8", "#eff6ff")}
+          className="text-xs font-semibold text-blue-200 bg-blue-500/20 border border-blue-400/30 px-3 py-1 rounded-lg cursor-pointer hover:bg-blue-500/30"
         >
           Add
         </button>
@@ -165,85 +154,51 @@ function ActiveActions({ currentExercise, onAction }: { currentExercise: string 
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <button onClick={() => onAction({ type: "set-done" })} style={primaryBtnStyle}>
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={() => onAction({ type: "set-done" })}
+          className="text-sm font-bold px-4 py-2 rounded-lg bg-green-500/20 border border-green-400/40 text-green-200 cursor-pointer hover:bg-green-500/30 transition-colors"
+        >
           Set Done
         </button>
         <button
           onClick={() => setShowForm((v) => !v)}
-          style={secondaryBtnStyle}
-          title="Log with specific weight / reps"
+          className="text-sm font-semibold px-3 py-2 rounded-lg bg-white/8 border border-white/15 text-violet-200 cursor-pointer hover:bg-white/15 transition-colors"
         >
           Done with numbers…
         </button>
         {currentExercise && (
-          <button onClick={() => onAction({ type: "skip" })} style={ghostBtnStyle}>
+          <button
+            onClick={() => onAction({ type: "skip" })}
+            className="text-sm px-3 py-2 rounded-lg bg-transparent border border-white/10 text-white/40 cursor-pointer hover:text-white/60 hover:border-white/20 transition-colors"
+          >
             Skip
           </button>
         )}
       </div>
 
       {showForm && (
-        <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+        <div className="flex gap-2 items-center flex-wrap">
           <input
             type="number" placeholder="Weight (lbs)" value={weight}
             onChange={(e) => setWeight(e.target.value)}
-            style={numInputStyle}
+            className="glass-input w-28 text-sm rounded-lg px-2 py-1"
           />
-          <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>×</span>
+          <span className="text-xs text-violet-300/50">×</span>
           <input
             type="number" placeholder="Reps" value={reps}
             onChange={(e) => setReps(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitWithNumbers()}
-            style={numInputStyle}
+            className="glass-input w-20 text-sm rounded-lg px-2 py-1"
           />
-          <button onClick={submitWithNumbers} style={primaryBtnStyle}>Log</button>
-          <button onClick={() => setShowForm(false)} style={ghostBtnStyle}>Cancel</button>
+          <button onClick={submitWithNumbers} className="text-sm font-bold px-3 py-1 rounded-lg bg-green-500/20 border border-green-400/40 text-green-200 cursor-pointer hover:bg-green-500/30">Log</button>
+          <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1 rounded-lg border border-white/10 text-white/40 cursor-pointer hover:text-white/60 bg-transparent">Cancel</button>
         </div>
       )}
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Shared button styles
-// ---------------------------------------------------------------------------
-
-function btnStyle(color: string, bg: string): React.CSSProperties {
-  return {
-    fontSize: "0.7rem", fontWeight: 700, padding: "0.2rem 0.45rem",
-    borderRadius: "0.25rem", border: `1px solid ${color}20`,
-    backgroundColor: bg, color, cursor: "pointer", lineHeight: 1.2,
-  };
-}
-
-const primaryBtnStyle: React.CSSProperties = {
-  fontSize: "0.8rem", fontWeight: 700,
-  padding: "0.4rem 0.875rem", borderRadius: "0.375rem",
-  border: "none", backgroundColor: "#111827", color: "white",
-  cursor: "pointer",
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  fontSize: "0.8rem", fontWeight: 600,
-  padding: "0.4rem 0.75rem", borderRadius: "0.375rem",
-  border: "1px solid #d1d5db", backgroundColor: "white", color: "#374151",
-  cursor: "pointer",
-};
-
-const ghostBtnStyle: React.CSSProperties = {
-  fontSize: "0.8rem", color: "#6b7280",
-  padding: "0.4rem 0.6rem", borderRadius: "0.375rem",
-  border: "1px solid #e5e7eb", backgroundColor: "transparent",
-  cursor: "pointer",
-};
-
-const numInputStyle: React.CSSProperties = {
-  width: "6rem", fontSize: "0.8rem",
-  padding: "0.3rem 0.5rem", borderRadius: "0.375rem",
-  border: "1px solid #d1d5db",
-};
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -266,11 +221,8 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
     current_plan,
   } = response;
 
-  const phaseStyle = phaseColors[phase] ?? phaseColors.planning;
+  const ps = phaseStyle[phase] ?? phaseStyle.planning;
 
-  // ---------------------------------------------------------------------------
-  // Rest countdown timer
-  // ---------------------------------------------------------------------------
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const restKeyRef = useRef<number>(0);
   const announcedRef = useRef<number>(-1);
@@ -288,10 +240,7 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
     if (timeLeft === null || timeLeft <= 0) return;
     const id = setInterval(() => {
       setTimeLeft((t) => {
-        if (t === null || t <= 1) {
-          clearInterval(id);
-          return 0;
-        }
+        if (t === null || t <= 1) { clearInterval(id); return 0; }
         return t - 1;
       });
     }, 1000);
@@ -303,7 +252,6 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
     const currentKey = restKeyRef.current;
     if (announcedRef.current === currentKey) return;
     announcedRef.current = currentKey;
-
     if (typeof window !== "undefined" && window.speechSynthesis) {
       const utterance = new SpeechSynthesisUtterance("Rest done. Let's go!");
       utterance.rate = 1.1;
@@ -317,128 +265,89 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
   const seconds = timeLeft !== null ? timeLeft % 60 : 0;
   const restDone = timeLeft === 0;
 
-  // ---------------------------------------------------------------------------
-  // Progress calculations
-  // ---------------------------------------------------------------------------
   const hasProgress = total_exercises > 0;
-  const progressPercent = hasProgress
-    ? Math.round((completed_exercises / total_exercises) * 100)
-    : 0;
+  const progressPercent = hasProgress ? Math.round((completed_exercises / total_exercises) * 100) : 0;
 
-  // Use current_plan for the plan editor; fall back to suggested_exercises names for planning phase
   const planForEditor: PlanItem[] =
     current_plan.length > 0
       ? current_plan
       : suggested_exercises.map((name) => ({
-          name,
-          target_sets: 3,
-          target_reps: 10,
-          sets_done: 0,
-          finalized: false,
+          name, target_sets: 3, target_reps: 10, sets_done: 0, finalized: false,
         }));
 
   const showPlanEditor = planForEditor.length > 0 && phase !== "done";
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-
-      {/* Session header with progress */}
+    <div className="flex flex-col gap-4">
+      {/* Progress bar */}
       {hasProgress && (
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: "0.5rem",
-        }}>
+        <div className="flex items-center gap-2">
           {session_type && (
-            <span style={{
-              fontSize: "0.7rem", fontWeight: 700, padding: "0.15rem 0.5rem",
-              borderRadius: "9999px", backgroundColor: "#f3f4f6",
-              color: "#374151", textTransform: "uppercase", letterSpacing: "0.06em",
-            }}>
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/10 text-violet-200/70 uppercase tracking-widest">
               {session_type}
             </span>
           )}
-          <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <div style={{
-              flex: 1, height: "6px", borderRadius: "3px",
-              backgroundColor: "#e5e7eb", overflow: "hidden",
-            }}>
-              <div style={{
-                width: `${progressPercent}%`,
-                height: "100%",
-                borderRadius: "3px",
-                backgroundColor: progressPercent === 100 ? "#22c55e" : "#3b82f6",
-                transition: "width 0.4s ease",
-              }} />
+          <div className="flex-1 flex items-center gap-2">
+            <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${progressPercent}%`,
+                  background: progressPercent === 100
+                    ? "linear-gradient(90deg, #22c55e, #4ade80)"
+                    : "linear-gradient(90deg, #6366f1, #818cf8)",
+                }}
+              />
             </div>
-            <span style={{ fontSize: "0.7rem", color: "#6b7280", fontWeight: 600, whiteSpace: "nowrap" }}>
+            <span className="text-xs text-violet-200/50 font-semibold whitespace-nowrap">
               {completed_exercises}/{total_exercises}
             </span>
           </div>
         </div>
       )}
 
-      {/* Phase badge + exercise header */}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-        <span style={{
-          fontSize: "0.7rem", fontWeight: 700, padding: "0.2rem 0.6rem",
-          borderRadius: "9999px", border: `1px solid ${phaseStyle.border}`,
-          backgroundColor: phaseStyle.bg, color: phaseStyle.text,
-          textTransform: "uppercase", letterSpacing: "0.06em",
-        }}>
-          {phaseStyle.label}
+      {/* Phase badge + current exercise */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`text-xs font-bold px-3 py-0.5 rounded-full border uppercase tracking-widest ${ps.badge}`}>
+          {ps.label}
         </span>
         {current_exercise && (
-          <span style={{ fontWeight: 700, fontSize: "1rem", color: "#111827" }}>
+          <span className="font-bold text-base text-violet-50">
             {current_exercise}
             {set_number != null && (
-              <span style={{ fontWeight: 400, color: "#6b7280", fontSize: "0.875rem" }}>
-                {" "}— set {set_number}
-              </span>
+              <span className="font-normal text-violet-300/60 text-sm"> — set {set_number}</span>
             )}
           </span>
         )}
         {current_exercise_sets_total > 0 && phase !== "done" && (
-          <span style={{
-            fontSize: "0.7rem", fontWeight: 600, color: "#9ca3af",
-            marginLeft: "auto",
-          }}>
+          <span className="text-xs font-semibold text-violet-300/40 ml-auto">
             {current_exercise_sets_done}/{current_exercise_sets_total} sets
           </span>
         )}
       </div>
 
       {/* Message */}
-      <p style={{ margin: 0, fontSize: "0.95rem", color: "#374151", lineHeight: 1.5 }}>
-        {message}
-      </p>
+      <p className="m-0 text-sm text-violet-100/85 leading-relaxed">{message}</p>
 
-      {/* Active-phase quick actions */}
+      {/* Active quick actions */}
       {phase === "active" && (
         <ActiveActions currentExercise={current_exercise} onAction={onAction} />
       )}
 
       {/* Rest timer */}
       {phase === "resting" && timeLeft !== null && (
-        <div style={{
-          padding: "0.875rem 1rem",
-          borderRadius: "0.625rem",
-          backgroundColor: restDone ? "#f0fdf4" : "#fefce8",
-          border: `1px solid ${restDone ? "#bbf7d0" : "#fde68a"}`,
-          textAlign: "center",
-        }}>
+        <div className={cn(
+          "px-4 py-3 rounded-xl border text-center",
+          restDone
+            ? "bg-green-500/15 border-green-400/40"
+            : "bg-yellow-500/15 border-yellow-400/40"
+        )}>
           {restDone ? (
-            <p style={{ margin: 0, fontWeight: 700, fontSize: "1.1rem", color: "#15803d" }}>
-              Rest done — let&apos;s go!
-            </p>
+            <p className="m-0 font-bold text-lg text-green-200">Rest done — let&apos;s go!</p>
           ) : (
             <>
-              <p style={{ margin: "0 0 0.25rem", fontSize: "0.75rem", color: "#a16207", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                Rest
-              </p>
-              <p style={{ margin: 0, fontWeight: 800, fontSize: "2rem", color: "#92400e", fontVariantNumeric: "tabular-nums" }}>
+              <p className="m-0 mb-1 text-xs text-yellow-300/60 font-semibold uppercase tracking-widest">Rest</p>
+              <p className="m-0 font-extrabold text-4xl text-yellow-200 tabular-nums">
                 {minutes > 0 ? `${minutes}:${String(seconds).padStart(2, "0")}` : `${seconds}s`}
               </p>
             </>
@@ -446,55 +355,44 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
         </div>
       )}
 
-      {/* Plan editor (all phases except done) */}
-      {showPlanEditor && (
-        <PlanEditor plan={planForEditor} onAction={onAction} />
-      )}
+      {/* Plan editor */}
+      {showPlanEditor && <PlanEditor plan={planForEditor} onAction={onAction} />}
 
       {/* Logged workout confirmation */}
       {logged_workout && (
-        <div style={{
-          padding: "0.625rem 0.875rem",
-          borderRadius: "0.5rem",
-          backgroundColor: logged_workout.is_personal_record ? "#fefce8" : "#f0fdf4",
-          border: `1px solid ${logged_workout.is_personal_record ? "#fde68a" : "#bbf7d0"}`,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
+        <div className={cn(
+          "px-3 py-2.5 rounded-xl border flex items-center justify-between",
+          logged_workout.is_personal_record
+            ? "glass-pr"
+            : "bg-green-500/10 border-green-500/25"
+        )}>
           <div>
-            <span style={{ fontWeight: 600, fontSize: "0.75rem", color: "#15803d", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Logged
-            </span>
-            <div style={{ marginTop: "0.15rem" }}>
-              <span style={{ fontWeight: 600, fontSize: "0.875rem", color: "#111827", textTransform: "capitalize" }}>
-                {logged_workout.exercise}
-              </span>
-              <span style={{ fontSize: "0.8125rem", color: "#6b7280", marginLeft: "0.4rem" }}>
+            <span className="text-xs font-semibold text-green-300/70 uppercase tracking-widest">Logged</span>
+            <div className="mt-0.5">
+              <span className="font-semibold text-sm text-violet-50 capitalize">{logged_workout.exercise}</span>
+              <span className="text-xs text-violet-200/60 ml-1.5">
                 {logged_workout.sets}×{logged_workout.reps} @ {logged_workout.weight} {logged_workout.weight_unit}
               </span>
             </div>
           </div>
           {logged_workout.is_personal_record && (
-            <span style={{
-              fontSize: "0.7rem", fontWeight: 700, padding: "0.15rem 0.5rem",
-              borderRadius: "9999px", backgroundColor: "#fbbf24", color: "#78350f",
-            }}>
-              PR
+            <span className="inline-flex items-center gap-1 bg-gradient-to-r from-yellow-400 to-amber-500 text-black font-extrabold text-xs px-3 py-1 rounded-full shadow-[0_0_14px_rgba(251,191,36,0.7)] tracking-wide">
+              🏆 PR
             </span>
           )}
         </div>
       )}
 
-      {/* Muscle targets from logged workout */}
+      {/* Muscle targets */}
       {logged_workout?.muscle_targets && logged_workout.muscle_targets.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+        <div className="flex flex-wrap gap-1.5">
           {logged_workout.muscle_targets.map((t: MuscleTargetResponse, i: number) => (
-            <span key={i} style={{
-              fontSize: "0.7rem", padding: "0.15rem 0.5rem",
-              borderRadius: "9999px",
-              backgroundColor: t.role === "primary" ? "#dcfce7" : "#f3f4f6",
-              color: t.role === "primary" ? "#166534" : "#374151",
-              border: `1px solid ${t.role === "primary" ? "#bbf7d0" : "#d1d5db"}`,
-            }}>
+            <span key={i} className={cn(
+              "text-xs px-2 py-0.5 rounded-full border",
+              t.role === "primary"
+                ? "bg-green-500/20 text-green-300 border-green-500/30"
+                : "bg-slate-500/20 text-slate-300 border-slate-500/30"
+            )}>
               {t.muscle_group}
             </span>
           ))}
@@ -503,16 +401,10 @@ export default function WorkoutPacer({ response, onAction }: WorkoutPacerProps) 
 
       {/* Done state */}
       {phase === "done" && (
-        <div style={{
-          padding: "0.75rem 1rem", borderRadius: "0.625rem",
-          backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0",
-          textAlign: "center",
-        }}>
-          <p style={{ margin: 0, fontWeight: 700, fontSize: "0.95rem", color: "#15803d" }}>
-            Workout complete. Good work.
-          </p>
+        <div className="px-4 py-3 rounded-xl bg-green-500/15 border border-green-400/40 text-center">
+          <p className="m-0 font-bold text-base text-green-200">Workout complete. Good work.</p>
           {hasProgress && (
-            <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#6b7280" }}>
+            <p className="m-0 mt-1 text-sm text-violet-200/50">
               {completed_exercises} exercise{completed_exercises !== 1 ? "s" : ""} logged
             </p>
           )}

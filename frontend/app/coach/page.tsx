@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { sendChat, ChatResponse } from "@/lib/chat-api";
-import type { ExerciseCoachResponse, CoachAPIResponse } from "@/lib/coach-api";
+import type { ExerciseCoachResponse } from "@/lib/coach-api";
 import { resizeImageToBase64 } from "@/lib/coach-api";
 import CoachResponse from "@/components/CoachResponse";
 import CameraCapture from "@/components/CameraCapture";
@@ -13,10 +13,9 @@ import VoiceInput from "@/components/VoiceInput";
 import { addWorkoutManually, logWorkout, type AgentActionResponse } from "@/lib/api";
 import { useWakeWord } from "@/lib/useWakeWord";
 import { useTTS } from "@/lib/useTTS";
-
-// ---------------------------------------------------------------------------
-// Message thread types
-// ---------------------------------------------------------------------------
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 interface UserMessage {
   role: "user";
@@ -33,10 +32,6 @@ interface AssistantMessage {
 }
 
 type ThreadMessage = UserMessage | AssistantMessage;
-
-// ---------------------------------------------------------------------------
-// Coach page
-// ---------------------------------------------------------------------------
 
 export default function CoachPage() {
   const router = useRouter();
@@ -64,9 +59,6 @@ export default function CoachPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const didRestoreRef = useRef(false);
 
-  // ---------------------------------------------------------------------------
-  // TTS — speak coach responses
-  // ---------------------------------------------------------------------------
   const [ttsSuppressed, setTtsSuppressed] = useState(false);
   const tts = useTTS({
     voice: "echo",
@@ -74,9 +66,6 @@ export default function CoachPage() {
     onEnd: () => setTtsSuppressed(false),
   });
 
-  // ---------------------------------------------------------------------------
-  // Wake word — always-on listening for "Gym Buddy"
-  // ---------------------------------------------------------------------------
   const handleTranscriptRef = useRef<(text: string) => void>(() => {});
   const wakeWord = useWakeWord({
     onCommand: useCallback(
@@ -89,9 +78,6 @@ export default function CoachPage() {
     suppressed: ttsSuppressed || loading,
   });
 
-  // ---------------------------------------------------------------------------
-  // Auth check + sessionStorage restore
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     createClient()
       .auth.getSession()
@@ -113,7 +99,6 @@ export default function CoachPage() {
       });
   }, [router]);
 
-  // Persist thread + convId across navigation (strip images to avoid quota issues)
   useEffect(() => {
     if (!didRestoreRef.current) return;
     try {
@@ -128,14 +113,10 @@ export default function CoachPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thread, loading]);
 
-  // Keep ref in sync so VoiceInput callback captures latest pendingImage
   useEffect(() => {
     pendingImageRef.current = pendingImage;
   }, [pendingImage]);
 
-  // ---------------------------------------------------------------------------
-  // Image helpers
-  // ---------------------------------------------------------------------------
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -180,9 +161,6 @@ export default function CoachPage() {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Core submit logic
-  // ---------------------------------------------------------------------------
   const submitMessage = useCallback(
     async (userText: string, img: string | null) => {
       if (!userText && !img) return;
@@ -217,7 +195,6 @@ export default function CoachPage() {
         };
         setThread((prev) => [...prev, assistantMsg]);
 
-        // Speak the response — use inline audio if available, else fetch TTS
         if (result.tts_audio_b64) {
           tts.speakFromBase64(result.tts_audio_b64);
         } else {
@@ -233,9 +210,6 @@ export default function CoachPage() {
     [coachConvId, tts]
   );
 
-  // ---------------------------------------------------------------------------
-  // VoiceInput handler — captures pending image at fire time
-  // ---------------------------------------------------------------------------
   const handleTranscript = useCallback(
     (voiceText: string) => {
       const img = pendingImageRef.current;
@@ -275,14 +249,10 @@ export default function CoachPage() {
     [submitMessage, thread]
   );
 
-  // Override handleTranscriptRef to point to the VoiceInput-aware handler
   useEffect(() => {
     handleTranscriptRef.current = handleTranscript;
   }, [handleTranscript]);
 
-  // ---------------------------------------------------------------------------
-  // Clear conversation
-  // ---------------------------------------------------------------------------
   function handleClear() {
     setThread([]);
     setCoachConvId(null);
@@ -293,76 +263,60 @@ export default function CoachPage() {
 
   if (!ready) return null;
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
   return (
-    <main style={{ maxWidth: "720px", margin: "0 auto", padding: "2rem 1rem" }}>
-
-      {/* Page header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+    <main className="max-w-3xl mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="flex justify-between items-start mb-6">
         <div>
-          <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Coach</h1>
-          <p style={{ color: "#9ca3af", fontSize: "0.875rem", margin: "0.25rem 0 0" }}>
+          <h1 className="text-3xl font-bold text-white m-0">Coach</h1>
+          <p className="text-white/40 text-sm mt-1 mb-0">
             Ask about exercise form, identify equipment, or get technique guidance.
           </p>
         </div>
         {thread.length > 0 && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={handleClear}
-            style={{
-              fontSize: "0.8rem", color: "#6b7280",
-              background: "none", border: "none", cursor: "pointer", padding: "0.2rem 0.4rem",
-            }}
+            className="text-white/40 hover:text-white text-sm"
           >
             Clear
-          </button>
+          </Button>
         )}
       </div>
 
-      <div style={{ marginTop: "1.5rem" }} />
-
       {/* Message thread */}
       {thread.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div className="flex flex-col gap-4 mb-6">
           {thread.map((msg, i) => {
             if (msg.role === "user") {
               return (
-                <div key={i} style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <div style={{
-                    maxWidth: "85%",
-                    backgroundColor: "#111827", color: "white",
-                    borderRadius: "0.75rem 0.75rem 0.125rem 0.75rem",
-                    padding: "0.625rem 0.875rem",
-                  }}>
+                <div key={i} className="flex justify-end">
+                  <div className="max-w-[85%] bg-white/10 backdrop-blur-sm border border-white/15 text-white rounded-[0.75rem_0.75rem_0.125rem_0.75rem] px-3.5 py-2.5">
                     {msg.image && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={msg.image}
                         alt="uploaded"
-                        style={{ width: "100%", maxHeight: "160px", objectFit: "cover", borderRadius: "0.375rem", marginBottom: "0.4rem" }}
+                        className="w-full max-h-40 object-cover rounded-md mb-2"
                       />
                     )}
-                    {msg.text && <p style={{ margin: 0, fontSize: "0.875rem" }}>{msg.text}</p>}
+                    {msg.text && <p className="m-0 text-sm">{msg.text}</p>}
                   </div>
                 </div>
               );
             }
 
             return (
-              <div key={i} style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                <span style={{ fontSize: "0.7rem", color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <div key={i} className="flex flex-col gap-1">
+                <span className="text-[0.7rem] text-white/40 font-semibold uppercase tracking-widest">
                   Coach
                 </span>
-                <div style={{
-                  backgroundColor: "white", border: "1px solid #e5e7eb",
-                  borderRadius: "0.125rem 0.75rem 0.75rem 0.75rem",
-                  padding: "0.875rem",
-                }}>
+                <div className="glass rounded-[0.125rem_0.75rem_0.75rem_0.75rem] p-4">
                   {msg.coach ? (
                     <CoachResponse response={msg.coach} onLogExercise={handleLogExercise} />
                   ) : (
-                    <p style={{ margin: 0, fontSize: "0.875rem", color: "#374151" }}>{msg.text}</p>
+                    <p className="m-0 text-sm text-white/80">{msg.text}</p>
                   )}
                 </div>
               </div>
@@ -370,16 +324,11 @@ export default function CoachPage() {
           })}
 
           {loading && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-              <span style={{ fontSize: "0.7rem", color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7rem] text-white/40 font-semibold uppercase tracking-widest">
                 Thinking...
               </span>
-              <div style={{
-                backgroundColor: "#f3f4f6", border: "1px solid #e5e7eb",
-                borderRadius: "0.125rem 0.75rem 0.75rem 0.75rem",
-                padding: "0.875rem",
-                color: "#9ca3af", fontSize: "0.875rem",
-              }}>
+              <div className="glass rounded-[0.125rem_0.75rem_0.75rem_0.75rem] p-4 text-white/30 text-sm animate-pulse">
                 ···
               </div>
             </div>
@@ -391,99 +340,85 @@ export default function CoachPage() {
 
       {/* Empty state */}
       {thread.length === 0 && !loading && (
-        <div style={{ textAlign: "center", padding: "3rem 1rem", color: "#9ca3af" }}>
-          <p style={{ fontSize: "0.95rem", margin: 0 }}>
+        <div className="text-center py-12 px-4 text-white/30">
+          <p className="text-base m-0">
             Ask about exercise form, identify equipment from a photo, or get guidance on a specific muscle group.
           </p>
         </div>
       )}
 
-      {/* Error */}
       {error && (
-        <p role="alert" style={{ color: "#dc2626", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
-          {error}
-        </p>
+        <p role="alert" className="text-red-400 text-sm mb-3">{error}</p>
       )}
 
-      {/* Input area — sticky at bottom */}
-      <div style={{
-        position: "sticky", bottom: 0,
-        backgroundColor: "white",
-        paddingTop: "0.75rem",
-        borderTop: thread.length > 0 ? "1px solid #e5e7eb" : "none",
-      }}>
-        {/* Pending image preview */}
-        {pendingImage && (
-          <div style={{ position: "relative", marginBottom: "0.5rem" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={pendingImage}
-              alt="preview"
-              style={{ width: "100%", maxHeight: "120px", objectFit: "cover", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}
-            />
-            <button
-              type="button"
-              onClick={() => setPendingImage(null)}
-              style={{
-                position: "absolute", top: "0.25rem", right: "0.25rem",
-                background: "rgba(0,0,0,0.5)", color: "white",
-                border: "none", borderRadius: "9999px",
-                width: "1.4rem", height: "1.4rem", cursor: "pointer", fontSize: "0.7rem",
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        )}
+      {/* Sticky input area */}
+      <div className={cn(
+        "sticky bottom-0 pt-3",
+        thread.length > 0 && "border-t border-white/10"
+      )}>
+        <div className="glass p-4 flex flex-col gap-3">
+          {/* Pending image preview */}
+          {pendingImage && (
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={pendingImage}
+                alt="preview"
+                className="w-full max-h-32 object-cover rounded-lg border border-white/15"
+              />
+              <button
+                type="button"
+                onClick={() => setPendingImage(null)}
+                className="absolute top-1.5 right-1.5 bg-black/60 text-white border-none rounded-full w-6 h-6 cursor-pointer text-xs flex items-center justify-center hover:bg-black/80 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
-        {/* Image buttons */}
-        <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem" }}>
-          <button
-            type="button"
-            onClick={() => setShowCamera(true)}
-            title="Use camera"
-            style={{
-              padding: "0.4rem 0.6rem", background: "none",
-              border: "1px solid #d1d5db", borderRadius: "0.375rem",
-              cursor: "pointer", fontSize: "1rem", color: "#6b7280",
-            }}
-          >
-            📷
-          </button>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            title="Upload image"
-            style={{
-              padding: "0.4rem 0.6rem", background: "none",
-              border: "1px solid #d1d5db", borderRadius: "0.375rem",
-              cursor: "pointer", fontSize: "1rem", color: "#6b7280",
-            }}
-          >
-            🖼
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            style={{ display: "none" }}
-            onChange={handleFileChange}
+          {/* Image buttons */}
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCamera(true)}
+              title="Use camera"
+              className="border-white/20 text-white/60 hover:text-white hover:border-white/40 bg-transparent"
+            >
+              📷
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              title="Upload image"
+              className="border-white/20 text-white/60 hover:text-white hover:border-white/40 bg-transparent"
+            >
+              🖼
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+
+          <VoiceInput
+            onTranscript={handleTranscript}
+            disabled={loading}
+            label="Or type your question:"
+            placeholder="Ask about form, technique, or equipment..."
+            submitLabel="Send"
+            onListenStart={wakeWord.pause}
+            onListenEnd={wakeWord.resume}
           />
         </div>
-
-        {/* Voice + text input */}
-        <VoiceInput
-          onTranscript={handleTranscript}
-          disabled={loading}
-          label="Or type your question:"
-          placeholder="Ask about form, technique, or equipment..."
-          submitLabel="Send"
-          onListenStart={wakeWord.pause}
-          onListenEnd={wakeWord.resume}
-        />
       </div>
 
-      {/* Camera modal */}
       {showCamera && (
         <CameraCapture
           onCapture={handleCameraCapture}
@@ -493,47 +428,50 @@ export default function CoachPage() {
 
       {/* Log workout modal */}
       {logModal && (
-        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "1rem" }}>
-          <div style={{ backgroundColor: "white", borderRadius: "0.75rem", width: "100%", maxWidth: "400px", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.875rem 1rem", borderBottom: "1px solid #e5e7eb" }}>
-              <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "#111827" }}>Log Exercise</span>
-              <button onClick={() => setLogModal(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.1rem", color: "#6b7280" }}>✕</button>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+          <div className="glass w-full max-w-[400px] shadow-2xl">
+            <div className="flex justify-between items-center px-4 py-3 border-b border-white/10">
+              <span className="font-bold text-base text-white">Log Exercise</span>
+              <button onClick={() => setLogModal(null)} className="bg-transparent border-none cursor-pointer text-lg text-white/40 hover:text-white transition-colors">✕</button>
             </div>
-            <form onSubmit={handleLogSubmit} style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+            <form onSubmit={handleLogSubmit} className="p-4 flex flex-col gap-4">
               <div>
-                <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Exercise</label>
-                <input type="text" value={logModal.exerciseName} readOnly style={{ width: "100%", padding: "0.5rem 0.75rem", fontSize: "0.875rem", border: "1px solid #e5e7eb", borderRadius: "0.375rem", backgroundColor: "#f9fafb", color: "#374151", boxSizing: "border-box" }} />
+                <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-1">Exercise</label>
+                <Input type="text" value={logModal.exerciseName} readOnly className="glass-input opacity-70" />
               </div>
-              <div style={{ display: "flex", gap: "0.75rem" }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Sets</label>
-                  <input type="number" min="1" max="99" value={logSets} onChange={(e) => setLogSets(e.target.value)} style={{ width: "100%", padding: "0.5rem 0.75rem", fontSize: "0.875rem", border: "1px solid #d1d5db", borderRadius: "0.375rem", boxSizing: "border-box" }} />
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-1">Sets</label>
+                  <Input type="number" min="1" max="99" value={logSets} onChange={(e) => setLogSets(e.target.value)} className="glass-input" />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Reps</label>
-                  <input type="number" min="1" max="999" value={logReps} onChange={(e) => setLogReps(e.target.value)} style={{ width: "100%", padding: "0.5rem 0.75rem", fontSize: "0.875rem", border: "1px solid #d1d5db", borderRadius: "0.375rem", boxSizing: "border-box" }} />
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-1">Reps</label>
+                  <Input type="number" min="1" max="999" value={logReps} onChange={(e) => setLogReps(e.target.value)} className="glass-input" />
                 </div>
               </div>
               <div>
-                <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Weight</label>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input type="number" min="0" step="0.5" value={logWeight} onChange={(e) => setLogWeight(e.target.value)} style={{ flex: 1, padding: "0.5rem 0.75rem", fontSize: "0.875rem", border: "1px solid #d1d5db", borderRadius: "0.375rem" }} />
-                  <select value={logUnit} onChange={(e) => setLogUnit(e.target.value as "lbs" | "kg")} style={{ padding: "0.5rem", fontSize: "0.875rem", border: "1px solid #d1d5db", borderRadius: "0.375rem", backgroundColor: "white", cursor: "pointer" }}>
+                <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-1">Weight</label>
+                <div className="flex gap-2">
+                  <Input type="number" min="0" step="0.5" value={logWeight} onChange={(e) => setLogWeight(e.target.value)} className="glass-input flex-1" />
+                  <select value={logUnit} onChange={(e) => setLogUnit(e.target.value as "lbs" | "kg")} className="glass-input rounded-lg px-2 py-1 text-sm w-16">
                     <option value="lbs">lbs</option>
                     <option value="kg">kg</option>
                   </select>
                 </div>
               </div>
-              {logError && <p role="alert" style={{ margin: 0, fontSize: "0.8rem", color: "#dc2626" }}>{logError}</p>}
-              <button type="submit" disabled={logSubmitting} style={{ padding: "0.625rem", backgroundColor: logSubmitting ? "#6b7280" : "#111827", color: "white", border: "none", borderRadius: "0.5rem", fontSize: "0.875rem", fontWeight: 600, cursor: logSubmitting ? "not-allowed" : "pointer" }}>
+              {logError && <p role="alert" className="m-0 text-sm text-red-400">{logError}</p>}
+              <Button
+                type="submit"
+                disabled={logSubmitting}
+                className="w-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold"
+              >
                 {logSubmitting ? "Logging..." : "Log Workout"}
-              </button>
+              </Button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Wake word always-listening indicator */}
       <WakeWordIndicator
         isListening={wakeWord.isListening}
         isActivated={wakeWord.isActivated}

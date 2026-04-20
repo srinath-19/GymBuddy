@@ -11,10 +11,8 @@ import VoiceInput from "@/components/VoiceInput";
 import type { VoiceInputHandle } from "@/components/VoiceInput";
 import { useWakeWord } from "@/lib/useWakeWord";
 import { useTTS } from "@/lib/useTTS";
-
-// ---------------------------------------------------------------------------
-// Message thread types
-// ---------------------------------------------------------------------------
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface UserMessage {
   role: "user";
@@ -29,10 +27,6 @@ interface AssistantMessage {
 
 type ThreadMessage = UserMessage | AssistantMessage;
 
-// ---------------------------------------------------------------------------
-// Pacer page
-// ---------------------------------------------------------------------------
-
 export default function PacerPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -43,7 +37,6 @@ export default function PacerPage() {
 
   const [pacerConvId, setPacerConvId] = useState<string | null>(null);
 
-  // Latest phase — used for auto-listen after rest
   const [latestPhase, setLatestPhase] = useState<string | null>(null);
   const [latestRestSeconds, setLatestRestSeconds] = useState<number | null>(null);
 
@@ -51,9 +44,6 @@ export default function PacerPage() {
   const voiceInputRef = useRef<VoiceInputHandle | null>(null);
   const didRestoreRef = useRef(false);
 
-  // ---------------------------------------------------------------------------
-  // TTS — speak pacer responses
-  // ---------------------------------------------------------------------------
   const [ttsSuppressed, setTtsSuppressed] = useState(false);
   const tts = useTTS({
     voice: "echo",
@@ -61,9 +51,6 @@ export default function PacerPage() {
     onEnd: () => setTtsSuppressed(false),
   });
 
-  // ---------------------------------------------------------------------------
-  // Wake word — always-on listening for "Gym Buddy"
-  // ---------------------------------------------------------------------------
   const handleTranscriptRef = useRef<(text: string) => void>(() => {});
   const wakeWord = useWakeWord({
     onCommand: useCallback(
@@ -76,9 +63,6 @@ export default function PacerPage() {
     suppressed: ttsSuppressed || loading,
   });
 
-  // ---------------------------------------------------------------------------
-  // Auth check + sessionStorage restore
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     createClient()
       .auth.getSession()
@@ -100,7 +84,6 @@ export default function PacerPage() {
       });
   }, [router]);
 
-  // Persist thread + convId across navigation
   useEffect(() => {
     if (!didRestoreRef.current) return;
     try {
@@ -112,26 +95,14 @@ export default function PacerPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thread, loading]);
 
-  // ---------------------------------------------------------------------------
-  // Auto-listen: when rest timer ends (phase was "resting"), auto-start voice
-  // We detect this by watching the latest response phase + rest_seconds.
-  // The WorkoutPacer component handles the countdown; here we just set a timer
-  // to trigger auto-listen when rest_seconds elapses.
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (latestPhase !== "resting" || !latestRestSeconds || latestRestSeconds <= 0) return;
-
     const timerId = setTimeout(() => {
-      // Auto-start voice recognition after rest is done
       voiceInputRef.current?.startListening();
-    }, (latestRestSeconds + 1) * 1000); // +1s buffer after timer ends
-
+    }, (latestRestSeconds + 1) * 1000);
     return () => clearTimeout(timerId);
   }, [latestPhase, latestRestSeconds]);
 
-  // ---------------------------------------------------------------------------
-  // VoiceInput handler
-  // ---------------------------------------------------------------------------
   const handleTranscript = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
@@ -163,7 +134,6 @@ export default function PacerPage() {
         };
         setThread((prev) => [...prev, assistantMsg]);
 
-        // Speak the response — use inline audio if available, else fetch TTS
         if (result.tts_audio_b64) {
           tts.speakFromBase64(result.tts_audio_b64);
         } else {
@@ -179,14 +149,10 @@ export default function PacerPage() {
     [pacerConvId, tts]
   );
 
-  // Keep ref in sync
   useEffect(() => {
     handleTranscriptRef.current = handleTranscript;
   }, [handleTranscript]);
 
-  // ---------------------------------------------------------------------------
-  // Manual action handler — calls REST endpoints directly, no LLM roundtrip
-  // ---------------------------------------------------------------------------
   const handleManualAction = useCallback(
     async (action: PacerManualAction) => {
       if (!pacerConvId) return;
@@ -217,7 +183,6 @@ export default function PacerPage() {
         setLatestPhase(pacer.phase);
         setLatestRestSeconds(pacer.rest_seconds);
         setThread((prev) => [...prev, { role: "assistant" as const, pacer, text: pacer.message }]);
-        // Speak manual action responses — use inline audio if available, else fetch TTS
         if (pacer.tts_audio_b64) {
           tts.speakFromBase64(pacer.tts_audio_b64);
         } else if (pacer.message) {
@@ -232,9 +197,6 @@ export default function PacerPage() {
     [pacerConvId, tts]
   );
 
-  // ---------------------------------------------------------------------------
-  // Quick actions
-  // ---------------------------------------------------------------------------
   function handleEndSession() {
     handleTranscript("end session");
   }
@@ -250,7 +212,6 @@ export default function PacerPage() {
 
   if (!ready) return null;
 
-  // Derive session info from latest pacer response
   const latestPacer = [...thread].reverse().find(
     (m): m is AssistantMessage => m.role === "assistant" && !!m.pacer
   )?.pacer;
@@ -258,85 +219,71 @@ export default function PacerPage() {
   const sessionActive = latestPacer && latestPacer.phase !== "done" && latestPacer.total_exercises > 0;
   const sessionDone = latestPacer?.phase === "done";
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
   return (
-    <main style={{ maxWidth: "720px", margin: "0 auto", padding: "2rem 1rem" }}>
-
-      {/* Page header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+    <main className="max-w-3xl mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="flex justify-between items-start mb-6">
         <div>
-          <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Pacer</h1>
-          <p style={{ color: "#9ca3af", fontSize: "0.875rem", margin: "0.25rem 0 0" }}>
+          <h1 className="text-3xl font-bold text-white m-0">Pacer</h1>
+          <p className="text-white/40 text-sm mt-1 mb-0">
             Voice-guided workouts. Say &quot;start my push workout&quot; to begin.
           </p>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <div className="flex gap-2 items-center">
           {sessionActive && (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleEndSession}
               disabled={loading}
-              style={{
-                fontSize: "0.8rem", fontWeight: 600, color: "#dc2626",
-                background: "none", border: "1px solid #fecaca",
-                borderRadius: "0.375rem", cursor: "pointer",
-                padding: "0.3rem 0.6rem",
-                opacity: loading ? 0.5 : 1,
-              }}
+              className="text-red-400 border-red-400/40 hover:bg-red-400/10 text-sm font-semibold disabled:opacity-50"
             >
               End Session
-            </button>
+            </Button>
           )}
           {thread.length > 0 && (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleClear}
-              style={{
-                fontSize: "0.8rem", color: "#6b7280",
-                background: "none", border: "none", cursor: "pointer", padding: "0.2rem 0.4rem",
-              }}
+              className="text-white/40 hover:text-white text-sm"
             >
               Clear
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
-      <div style={{ marginTop: "1.5rem" }} />
-
       {/* Message thread */}
       {thread.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div className="flex flex-col gap-4 mb-6">
           {thread.map((msg, i) => {
             if (msg.role === "user") {
               return (
-                <div key={i} style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <div style={{
-                    maxWidth: "85%",
-                    backgroundColor: "#111827", color: "white",
-                    borderRadius: "0.75rem 0.75rem 0.125rem 0.75rem",
-                    padding: "0.625rem 0.875rem",
-                  }}>
-                    <p style={{ margin: 0, fontSize: "0.875rem" }}>{msg.text}</p>
+                <div key={i} className="flex justify-end">
+                  <div className="max-w-[85%] bg-white/10 backdrop-blur-sm border border-white/15 text-white rounded-[0.75rem_0.75rem_0.125rem_0.75rem] px-3.5 py-2.5">
+                    <p className="m-0 text-sm">{msg.text}</p>
                   </div>
                 </div>
               );
             }
 
             return (
-              <div key={i} style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                <span style={{ fontSize: "0.7rem", color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <div key={i} className="flex flex-col gap-1">
+                <span className="text-[0.7rem] text-white/40 font-semibold uppercase tracking-widest">
                   Pacer
                 </span>
-                <div style={{
-                  backgroundColor: "white", border: "1px solid #e5e7eb",
-                  borderRadius: "0.125rem 0.75rem 0.75rem 0.75rem",
-                  padding: "0.875rem",
-                }}>
+                <div className={cn(
+                  "glass rounded-[0.125rem_0.75rem_0.75rem_0.75rem] p-4",
+                  msg.pacer?.phase === "active" && "border-green-400/30",
+                  msg.pacer?.phase === "resting" && "border-yellow-400/30",
+                  msg.pacer?.phase === "planning" && "border-blue-400/30",
+                  msg.pacer?.phase === "done" && "border-white/10"
+                )}>
                   {msg.pacer ? (
                     <WorkoutPacer response={msg.pacer} onAction={handleManualAction} />
                   ) : (
-                    <p style={{ margin: 0, fontSize: "0.875rem", color: "#374151" }}>{msg.text}</p>
+                    <p className="m-0 text-sm text-white/80">{msg.text}</p>
                   )}
                 </div>
               </div>
@@ -344,16 +291,11 @@ export default function PacerPage() {
           })}
 
           {loading && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-              <span style={{ fontSize: "0.7rem", color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7rem] text-white/40 font-semibold uppercase tracking-widest">
                 Thinking...
               </span>
-              <div style={{
-                backgroundColor: "#f3f4f6", border: "1px solid #e5e7eb",
-                borderRadius: "0.125rem 0.75rem 0.75rem 0.75rem",
-                padding: "0.875rem",
-                color: "#9ca3af", fontSize: "0.875rem",
-              }}>
+              <div className="glass rounded-[0.125rem_0.75rem_0.75rem_0.75rem] p-4 text-white/30 text-sm animate-pulse">
                 ···
               </div>
             </div>
@@ -365,41 +307,20 @@ export default function PacerPage() {
 
       {/* Empty state */}
       {thread.length === 0 && !loading && (
-        <div style={{ textAlign: "center", padding: "3rem 1rem", color: "#9ca3af" }}>
-          <p style={{ fontSize: "2.5rem", margin: "0 0 1rem" }}>🏋️</p>
-          <p style={{ fontSize: "0.95rem", margin: "0 0 0.5rem", fontWeight: 600, color: "#374151" }}>
-            Ready to train?
-          </p>
-          <p style={{ fontSize: "0.875rem", margin: 0, color: "#9ca3af" }}>
+        <div className="text-center py-12 px-4">
+          <p className="text-5xl mb-4">🏋️</p>
+          <p className="text-base font-semibold text-white/70 mb-1">Ready to train?</p>
+          <p className="text-sm text-white/40 m-0">
             Say &quot;start my push workout&quot; to get a guided plan, or &quot;done&quot; after each set.
           </p>
 
-          {/* Quick-start buttons */}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center", marginTop: "1.5rem" }}>
+          <div className="flex flex-wrap gap-2 justify-center mt-6">
             {["push", "pull", "legs", "chest", "back", "arms"].map((stype) => (
               <button
                 key={stype}
                 onClick={() => handleTranscript(`start my ${stype} workout`)}
                 disabled={loading}
-                style={{
-                  fontSize: "0.8rem", fontWeight: 600,
-                  padding: "0.4rem 0.75rem",
-                  borderRadius: "9999px",
-                  border: "1px solid #d1d5db",
-                  backgroundColor: "white",
-                  color: "#374151",
-                  cursor: "pointer",
-                  textTransform: "capitalize",
-                  transition: "all 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = "#f3f4f6";
-                  e.currentTarget.style.borderColor = "#9ca3af";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "white";
-                  e.currentTarget.style.borderColor = "#d1d5db";
-                }}
+                className="text-sm font-semibold px-4 py-1.5 rounded-full border border-white/20 bg-white/5 text-white/60 hover:bg-white/15 hover:text-white hover:border-white/40 transition-all capitalize cursor-pointer disabled:opacity-40"
               >
                 {stype}
               </button>
@@ -408,61 +329,48 @@ export default function PacerPage() {
         </div>
       )}
 
-      {/* Error */}
       {error && (
-        <p role="alert" style={{ color: "#dc2626", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
-          {error}
-        </p>
+        <p role="alert" className="text-red-400 text-sm mb-3">{error}</p>
       )}
 
-      {/* Session summary after done */}
+      {/* Session done summary */}
       {sessionDone && latestPacer && (
-        <div style={{
-          padding: "1rem", borderRadius: "0.625rem",
-          backgroundColor: "#fafafa", border: "1px solid #e5e7eb",
-          marginBottom: "1rem", textAlign: "center",
-        }}>
-          <p style={{ margin: "0 0 0.5rem", fontSize: "0.95rem", fontWeight: 700, color: "#111827" }}>
-            Session Complete
-          </p>
-          <p style={{ margin: 0, fontSize: "0.875rem", color: "#6b7280" }}>
+        <div className="glass p-5 mb-4 text-center">
+          <p className="m-0 mb-1 text-base font-bold text-white">Session Complete 🎉</p>
+          <p className="m-0 text-sm text-white/50">
             {latestPacer.completed_exercises} exercise{latestPacer.completed_exercises !== 1 ? "s" : ""} logged
             {latestPacer.session_type ? ` • ${latestPacer.session_type} day` : ""}
           </p>
-          <button
+          <Button
             onClick={handleClear}
-            style={{
-              marginTop: "0.75rem", fontSize: "0.8rem", fontWeight: 600,
-              padding: "0.4rem 1rem", borderRadius: "0.375rem",
-              border: "1px solid #d1d5db", backgroundColor: "white",
-              color: "#374151", cursor: "pointer",
-            }}
+            variant="outline"
+            size="sm"
+            className="mt-3 border-white/20 text-white/60 hover:text-white hover:border-white/40 bg-transparent"
           >
             Start New Session
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Sticky voice input */}
-      <div style={{
-        position: "sticky", bottom: 0,
-        backgroundColor: "white",
-        paddingTop: "0.75rem",
-        borderTop: thread.length > 0 ? "1px solid #e5e7eb" : "none",
-      }}>
-        <VoiceInput
-          ref={voiceInputRef}
-          onTranscript={handleTranscript}
-          disabled={loading}
-          label="Or type a command:"
-          placeholder="'start my push workout', 'done', 'done 10 at 155'..."
-          submitLabel="Send"
-          onListenStart={wakeWord.pause}
-          onListenEnd={wakeWord.resume}
-        />
+      <div className={cn(
+        "sticky bottom-0 pt-3",
+        thread.length > 0 && "border-t border-white/10"
+      )}>
+        <div className="glass p-4">
+          <VoiceInput
+            ref={voiceInputRef}
+            onTranscript={handleTranscript}
+            disabled={loading}
+            label="Or type a command:"
+            placeholder="'start my push workout', 'done', 'done 10 at 155'..."
+            submitLabel="Send"
+            onListenStart={wakeWord.pause}
+            onListenEnd={wakeWord.resume}
+          />
+        </div>
       </div>
 
-      {/* Wake word always-listening indicator */}
       <WakeWordIndicator
         isListening={wakeWord.isListening}
         isActivated={wakeWord.isActivated}
