@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 };
 
 // The deployed frontend needs to read Cloud Run runtime env vars on each
-// request instead of baking NEXT_PUBLIC_* values into the build output.
+// request instead of baking NEXT_PUBLIC_* values into the build outputs.
 export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
