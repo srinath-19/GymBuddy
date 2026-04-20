@@ -1,8 +1,7 @@
 import { createClient } from "./supabase/client";
 import type { AgentActionResponse, WorkoutLogResponse } from "./api";
 import type { CoachAPIResponse } from "./coach-api";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { getApiBaseUrl } from "./public-env";
 
 // ---------------------------------------------------------------------------
 // Request / response shapes
@@ -73,7 +72,7 @@ interface APIEnvelope<T> {
 
 async function chatFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await getToken();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,

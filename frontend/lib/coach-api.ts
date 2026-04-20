@@ -1,6 +1,5 @@
 import { createClient } from "./supabase/client";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { getApiBaseUrl } from "./public-env";
 
 export interface CoachRequest {
   text: string;
@@ -54,7 +53,7 @@ async function getToken(): Promise<string> {
 
 async function coachFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await getToken();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
@@ -85,7 +84,7 @@ export async function askCoach(req: CoachRequest): Promise<CoachAPIResponse> {
 
 export async function clearConversation(conversationId: string): Promise<void> {
   const token = await getToken();
-  await fetch(`${API_BASE}/api/v1/coach/conversation/${conversationId}`, {
+  await fetch(`${getApiBaseUrl()}/api/v1/coach/conversation/${conversationId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });
