@@ -408,18 +408,18 @@ async def get_sessions(
 # ---------------------------------------------------------------------------
 
 async def fetch_workouts_by_date(
-    session: AsyncSession, user_id: uuid.UUID, date: Date
+    session: AsyncSession, user_id: uuid.UUID, date: Date, tz: str = "UTC"
 ) -> list[WorkoutLogResponse]:
-    """Return all workouts logged on a specific calendar date (UTC)."""
+    """Return all workouts logged on a specific calendar date in the given timezone."""
     result = await session.execute(
         text(_WORKOUT_SELECT + """
             WHERE w.user_id = :user_id
-              AND (w.logged_at AT TIME ZONE 'UTC')::date = :date
+              AND (w.logged_at AT TIME ZONE :tz)::date = :date
             GROUP BY w.id, w.user_id, w.exercise, w.sets, w.reps, w.weight,
                      w.weight_unit, w.notes, w.logged_at, w.created_at
             ORDER BY w.logged_at DESC
         """),
-        {"user_id": user_id, "date": date},
+        {"user_id": user_id, "date": date, "tz": tz},
     )
     return _rows_to_responses(result.mappings().all())
 
@@ -429,7 +429,7 @@ async def fetch_workouts_by_date(
 # ---------------------------------------------------------------------------
 
 async def delete_workouts_by_exercise_date(
-    session: AsyncSession, user_id: uuid.UUID, exercise: str, date: Date
+    session: AsyncSession, user_id: uuid.UUID, exercise: str, date: Date, tz: str = "UTC"
 ) -> list[WorkoutLogResponse]:
     """Delete all workouts matching exercise name on a given date. Returns deleted rows."""
     result = await session.execute(
@@ -437,11 +437,11 @@ async def delete_workouts_by_exercise_date(
             DELETE FROM workout_logs
             WHERE user_id = :user_id
               AND LOWER(exercise) LIKE LOWER(:pattern) ESCAPE '!'
-              AND (logged_at AT TIME ZONE 'UTC')::date = :date
+              AND (logged_at AT TIME ZONE :tz)::date = :date
             RETURNING id, user_id, exercise, sets, reps, weight, weight_unit,
                       notes, logged_at, created_at
         """),
-        {"user_id": user_id, "pattern": f"%{_escape_like(exercise)}%", "date": date},
+        {"user_id": user_id, "pattern": f"%{_escape_like(exercise)}%", "date": date, "tz": tz},
     )
     rows = result.mappings().all()
     return [WorkoutLogResponse(**row) for row in rows]

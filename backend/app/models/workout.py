@@ -33,6 +33,10 @@ class WorkoutRequest(BaseModel):
         min_length=3,
         description="Raw voice transcript or typed workout description",
     )
+    client_tz: str | None = Field(
+        default=None,
+        description="IANA timezone name from the client (e.g. 'America/Denver')",
+    )
 
 
 # ---------------------------------------------------------------------------

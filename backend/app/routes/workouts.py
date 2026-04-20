@@ -135,7 +135,7 @@ async def create_workout(
     user_id = UUID(current_user["sub"])
 
     try:
-        context, message = await run_agent(body.transcript, user_id)
+        context, message = await run_agent(body.transcript, user_id, client_tz=body.client_tz or "UTC")
     except Exception as exc:
         logger.exception("Agent failed for transcript: %r", body.transcript)
         raise HTTPException(
@@ -172,7 +172,7 @@ async def create_workout_stream(
     user_id = UUID(current_user["sub"])
 
     async def event_generator():
-        async for event in run_agent_streamed(body.transcript, user_id):
+        async for event in run_agent_streamed(body.transcript, user_id, client_tz=body.client_tz or "UTC"):
             if event["type"] == "done":
                 cache_dirty = event.pop("cache_dirty", False)
                 msg = event["message"]

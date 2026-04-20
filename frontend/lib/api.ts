@@ -179,9 +179,10 @@ async function apiFetch<T>(
 export async function logWorkout(
   transcript: string
 ): Promise<AgentActionResponse> {
+  const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const result = await apiFetch<AgentActionResponse>("/api/v1/workouts", {
     method: "POST",
-    body: JSON.stringify({ transcript }),
+    body: JSON.stringify({ transcript, client_tz: clientTz }),
   });
   if (!result.data) throw new Error("No data returned from server");
   return result.data;
@@ -204,7 +205,7 @@ export async function logWorkoutStreamed(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ transcript }),
+    body: JSON.stringify({ transcript, client_tz: Intl.DateTimeFormat().resolvedOptions().timeZone }),
   });
 
   if (!response.ok) {
