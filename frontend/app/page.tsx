@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useRouter } from "next/navigation";
 import VoiceInput from "@/components/VoiceInput";
+import WakeWordIndicator from "@/components/WakeWordIndicator";
 import {
   addWorkoutManually,
   AgentActionResponse,
@@ -12,7 +13,7 @@ import {
   getRequiredMuscles,
   getSessions,
   getWorkouts,
-  logWorkout,
+  logWorkoutStreamed,
   ManualWorkoutRequest,
   updateSession,
   updateWorkout,
@@ -21,6 +22,8 @@ import {
   WorkoutUpdateRequest,
 } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
+import { useWakeWord } from "@/lib/useWakeWord";
+import { useTTS } from "@/lib/useTTS";
 
 type UIState = "idle" | "submitting" | "error";
 
@@ -37,7 +40,8 @@ type DayGroup = {
 function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]): DayGroup[] {
   const map = new Map<string, WorkoutLogResponse[]>();
   for (const w of workouts) {
-    const key = w.logged_at.slice(0, 10); // "YYYY-MM-DD"
+    const _ld = new Date(w.logged_at);
+    const key = `${_ld.getFullYear()}-${String(_ld.getMonth() + 1).padStart(2, "0")}-${String(_ld.getDate()).padStart(2, "0")}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(w);
   }
@@ -71,7 +75,8 @@ function getWeekBounds(offset: number): { start: string; end: string; label: str
   mon.setHours(0, 0, 0, 0);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  const toISO = (d: Date) => d.toISOString().slice(0, 10);
+  const toISO = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const label =
     offset === 0
       ? "This week"
@@ -429,6 +434,7 @@ export default function HomePage() {
   const [workouts, setWorkouts] = useState<WorkoutLogResponse[]>([]);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [uiState, setUiState] = useState<UIState>("idle");
+  const [streamMessage, setStreamMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<AgentActionResponse | null>(null);
   const [historyError, setHistoryError] = useState(false);
@@ -491,6 +497,33 @@ export default function HomePage() {
     if (ready) void loadWorkouts();
   }, [ready, loadWorkouts]);
 
+  // ---------------------------------------------------------------------------
+  // TTS — speak agent responses back to the user
+  // ---------------------------------------------------------------------------
+  const tts = useTTS({
+    voice: "echo",
+    onStart: () => setTtsSuppressed(true),
+    onEnd: () => setTtsSuppressed(false),
+  });
+  const [ttsSuppressed, setTtsSuppressed] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Wake word — always-on listening for "Gym Buddy"
+  // ---------------------------------------------------------------------------
+  const wakeWord = useWakeWord({
+    onCommand: useCallback(
+      (cmd: string) => {
+        if (cmd.trim()) handleTranscriptRef.current(cmd);
+      },
+      []
+    ),
+    enabled: ready,
+    suppressed: ttsSuppressed || uiState === "submitting",
+  });
+
+  // Ref to avoid circular dependency between handleTranscript and useWakeWord
+  const handleTranscriptRef = useRef<(text: string) => void>(() => {});
+
   // Voice / text agent submit — goes directly to the workout parser agent
   const handleTranscript = useCallback(
     async (text: string) => {
@@ -498,18 +531,32 @@ export default function HomePage() {
       setErrorMessage(null);
       setLastAction(null);
 
+      setStreamMessage("Understanding your request...");
       try {
-        const result = await logWorkout(text);
+        const result = await logWorkoutStreamed(text, (msg) => setStreamMessage(msg));
         setLastAction(result);
         setUiState("idle");
+        setStreamMessage("");
+        // Speak the agent's response — use inline audio if available, else fetch TTS
+        if (result.tts_audio_b64) {
+          tts.speakFromBase64(result.tts_audio_b64);
+        } else if (result.message) {
+          tts.speak(result.message);
+        }
         await loadWorkouts();
       } catch (err) {
         setUiState("error");
+        setStreamMessage("");
         setErrorMessage(err instanceof Error ? err.message : "Something went wrong.");
       }
     },
-    [loadWorkouts]
+    [loadWorkouts, tts]
   );
+
+  // Keep ref in sync
+  useEffect(() => {
+    handleTranscriptRef.current = handleTranscript;
+  }, [handleTranscript]);
 
   // Delete a workout — optimistic: remove from state immediately
   const handleDelete = useCallback(
@@ -681,10 +728,12 @@ export default function HomePage() {
 
       {/* Voice / text input */}
       <section aria-label="Log a workout" style={{ marginBottom: "2.5rem" }}>
-        <VoiceInput onTranscript={handleTranscript} disabled={uiState === "submitting"} />
+        <VoiceInput onTranscript={handleTranscript} disabled={uiState === "submitting"} onListenStart={wakeWord.pause} onListenEnd={wakeWord.resume} />
 
         {uiState === "submitting" && (
-          <p style={{ color: "#6b7280", marginTop: "0.75rem" }}>Parsing and saving your workout...</p>
+          <p style={{ color: "#6b7280", marginTop: "0.75rem" }}>
+            {streamMessage || "Parsing and saving your workout..."}
+          </p>
         )}
 
         {uiState === "error" && errorMessage && (
@@ -1010,6 +1059,15 @@ export default function HomePage() {
       </section>
 
       </div>{/* end content */}
+
+      {/* Wake word always-listening indicator */}
+      <WakeWordIndicator
+        isListening={wakeWord.isListening}
+        isActivated={wakeWord.isActivated}
+        interimText={wakeWord.interimText}
+        supported={wakeWord.supported}
+        isSpeaking={tts.isSpeaking}
+      />
     </main>
   );
 }

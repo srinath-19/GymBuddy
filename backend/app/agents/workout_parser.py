@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import date as Date, timezone, datetime
 
@@ -732,6 +733,61 @@ Always call a tool — never just respond with text when a tool applies.
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
+
+TOOL_PROGRESS_MESSAGES: dict[str, str] = {
+    "log_workout": "Logging your workout...",
+    "get_last_workout": "Finding your last workout...",
+    "delete_workout": "Deleting workout...",
+    "update_workout_tool": "Updating your workout...",
+    "search_workouts_tool": "Searching your history...",
+    "start_workout_session": "Starting your session...",
+    "get_today_workouts": "Loading today's workouts...",
+    "delete_exercise_today": "Removing exercise from today...",
+    "get_workouts_for_date": "Loading workouts...",
+    "get_pr_for_exercise": "Looking up your PR...",
+    "get_session_for_date_tool": "Loading session info...",
+}
+
+
+async def run_agent_streamed(
+    transcript: str,
+    user_id: uuid.UUID,
+) -> AsyncGenerator[dict, None]:
+    context = GymContext(user_id=user_id)
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    dated_transcript = f"[Today is {today_iso}]\n{transcript}"
+
+    result = Runner.run_streamed(_agent, input=dated_transcript, context=context)
+
+    try:
+        async with asyncio.timeout(AGENT_TIMEOUT_SECONDS):
+            async for event in result.stream_events():
+                if (
+                    event.type == "run_item_stream_event"
+                    and event.name == "tool_called"
+                ):
+                    tool_name = event.item.raw_item.name
+                    msg = TOOL_PROGRESS_MESSAGES.get(tool_name, "Working on it...")
+                    yield {"type": "progress", "message": msg}
+    except TimeoutError:
+        yield {"type": "error", "message": "Request timed out. Try again."}
+        return
+    except Exception:
+        yield {"type": "error", "message": "AI service error. Try again."}
+        return
+
+    message: str = result.final_output or "Done."
+    yield {
+        "type": "done",
+        "action": context.action,
+        "message": message,
+        "logged_workout": context.logged_workout.model_dump(mode="json") if context.logged_workout else None,
+        "found_workouts": [w.model_dump(mode="json") for w in context.found_workouts] if context.found_workouts else None,
+        "deleted_workouts": [w.model_dump(mode="json") for w in context.deleted_workouts] if context.deleted_workouts else None,
+        "session": context.session.model_dump(mode="json") if context.session else None,
+        "cache_dirty": context.cache_dirty,
+    }
+
 
 async def run_agent(transcript: str, user_id: uuid.UUID) -> tuple[GymContext, str]:
     """

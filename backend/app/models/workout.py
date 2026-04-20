@@ -112,6 +112,7 @@ class AgentActionResponse(BaseModel):
     workout: WorkoutLogResponse | None = None        # populated when action="logged"/"updated"
     workouts: list[WorkoutLogResponse] | None = None  # populated when action="found" or bulk delete
     session: WorkoutSession | None = None            # populated when action="session_started"
+    tts_audio_b64: str | None = None                 # inline MP3 audio — avoids a second round trip
 
 
 class APIResponse(BaseModel):

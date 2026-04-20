@@ -132,6 +132,7 @@ export interface AgentActionResponse {
   workout: WorkoutLogResponse | null;
   workouts: WorkoutLogResponse[] | null;
   session: WorkoutSession | null;
+  tts_audio_b64?: string;
 }
 
 interface APIResponse<T> {
@@ -184,6 +185,59 @@ export async function logWorkout(
   });
   if (!result.data) throw new Error("No data returned from server");
   return result.data;
+}
+
+type WorkoutStreamEvent =
+  | { type: "progress"; message: string }
+  | { type: "done"; data: AgentActionResponse }
+  | { type: "error"; message: string };
+
+export async function logWorkoutStreamed(
+  transcript: string,
+  onProgress: (message: string) => void,
+): Promise<AgentActionResponse> {
+  const token = await getToken();
+
+  const response = await fetch(`${API_BASE}/api/v1/workouts/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ transcript }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(err?.error ?? `HTTP ${response.status}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: AgentActionResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as WorkoutStreamEvent;
+      if (event.type === "progress") {
+        onProgress(event.message);
+      } else if (event.type === "done") {
+        finalResult = event.data;
+      } else if (event.type === "error") {
+        throw new Error(event.message);
+      }
+    }
+  }
+
+  if (!finalResult) throw new Error("Stream ended without a result");
+  return finalResult;
 }
 
 export async function getWorkouts(limit = 50): Promise<WorkoutLogResponse[]> {

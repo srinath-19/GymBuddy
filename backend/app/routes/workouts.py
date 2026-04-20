@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import uuid
 from datetime import date as Date, datetime, time, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
-from ..agents.workout_parser import run_agent
+from ..agents.workout_parser import run_agent, run_agent_streamed
 from ..auth.dependencies import get_current_user
+from .tts import generate_tts_b64
 from ..cache.redis_client import (
     get_cached_sessions,
     get_cached_workouts,
@@ -147,9 +151,54 @@ async def create_workout(
         session=context.session,
     )
     if context.cache_dirty:
-        await _populate_workouts_cache(user_id)
-        await _populate_sessions_cache(user_id)
+        action_data.tts_audio_b64, _ = await asyncio.gather(
+            generate_tts_b64(message),
+            asyncio.gather(_populate_workouts_cache(user_id), _populate_sessions_cache(user_id)),
+        )
+    else:
+        action_data.tts_audio_b64 = await generate_tts_b64(message)
     return APIResponse(success=True, data=action_data)
+
+
+# ---------------------------------------------------------------------------
+# POST /workouts/stream  — AI-agent path with SSE-style progress events
+# ---------------------------------------------------------------------------
+
+@router.post("/workouts/stream")
+async def create_workout_stream(
+    body: WorkoutRequest,
+    current_user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    user_id = UUID(current_user["sub"])
+
+    async def event_generator():
+        async for event in run_agent_streamed(body.transcript, user_id):
+            if event["type"] == "done":
+                cache_dirty = event.pop("cache_dirty", False)
+                msg = event["message"]
+                action_data = AgentActionResponse(
+                    action=event["action"],  # type: ignore[arg-type]
+                    message=msg,
+                    workout=WorkoutLogResponse.model_validate(event["logged_workout"]) if event["logged_workout"] else None,
+                    workouts=(
+                        [WorkoutLogResponse.model_validate(w) for w in event["found_workouts"]]
+                        if event["found_workouts"]
+                        else ([WorkoutLogResponse.model_validate(w) for w in event["deleted_workouts"]] if event["deleted_workouts"] else None)
+                    ),
+                    session=WorkoutSession.model_validate(event["session"]) if event["session"] else None,
+                )
+                if cache_dirty:
+                    action_data.tts_audio_b64, _ = await asyncio.gather(
+                        generate_tts_b64(msg),
+                        asyncio.gather(_populate_workouts_cache(user_id), _populate_sessions_cache(user_id)),
+                    )
+                else:
+                    action_data.tts_audio_b64 = await generate_tts_b64(msg)
+                yield json.dumps({"type": "done", "data": action_data.model_dump(mode="json")}) + "\n"
+            else:
+                yield json.dumps(event) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 # ---------------------------------------------------------------------------
