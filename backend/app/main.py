@@ -11,6 +11,7 @@ from .db.database import create_tables
 from .routes.chat import router as chat_router
 from .routes.coach import router as coach_router
 from .routes.pacer import router as pacer_router
+from .routes.tts import router as tts_router
 from .routes.workouts import router
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ app.include_router(router)
 app.include_router(coach_router)
 app.include_router(chat_router)
 app.include_router(pacer_router)
+app.include_router(tts_router)
 
 
 @app.get("/health")
