@@ -8,8 +8,11 @@ import type { ExerciseCoachResponse, CoachAPIResponse } from "@/lib/coach-api";
 import { resizeImageToBase64 } from "@/lib/coach-api";
 import CoachResponse from "@/components/CoachResponse";
 import CameraCapture from "@/components/CameraCapture";
+import WakeWordIndicator from "@/components/WakeWordIndicator";
 import VoiceInput from "@/components/VoiceInput";
 import { addWorkoutManually, logWorkout, type AgentActionResponse } from "@/lib/api";
+import { useWakeWord } from "@/lib/useWakeWord";
+import { useTTS } from "@/lib/useTTS";
 
 // ---------------------------------------------------------------------------
 // Message thread types
@@ -59,18 +62,67 @@ export default function CoachPage() {
   const [logError, setLogError] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const didRestoreRef = useRef(false);
 
   // ---------------------------------------------------------------------------
-  // Auth check
+  // TTS — speak coach responses
+  // ---------------------------------------------------------------------------
+  const [ttsSuppressed, setTtsSuppressed] = useState(false);
+  const tts = useTTS({
+    voice: "echo",
+    onStart: () => setTtsSuppressed(true),
+    onEnd: () => setTtsSuppressed(false),
+  });
+
+  // ---------------------------------------------------------------------------
+  // Wake word — always-on listening for "Gym Buddy"
+  // ---------------------------------------------------------------------------
+  const handleTranscriptRef = useRef<(text: string) => void>(() => {});
+  const wakeWord = useWakeWord({
+    onCommand: useCallback(
+      (cmd: string) => {
+        if (cmd.trim()) handleTranscriptRef.current(cmd);
+      },
+      []
+    ),
+    enabled: ready,
+    suppressed: ttsSuppressed || loading,
+  });
+
+  // ---------------------------------------------------------------------------
+  // Auth check + sessionStorage restore
   // ---------------------------------------------------------------------------
   useEffect(() => {
     createClient()
       .auth.getSession()
       .then(({ data }) => {
-        if (!data.session) router.replace("/login");
-        else setReady(true);
+        if (!data.session) {
+          router.replace("/login");
+        } else {
+          try {
+            const saved = sessionStorage.getItem("gymbuddy:coach");
+            if (saved) {
+              const { thread: t, coachConvId: id } = JSON.parse(saved) as { thread: ThreadMessage[]; coachConvId: string | null };
+              if (t?.length) setThread(t);
+              if (id) setCoachConvId(id);
+            }
+          } catch { /* ignore */ }
+          didRestoreRef.current = true;
+          setReady(true);
+        }
       });
   }, [router]);
+
+  // Persist thread + convId across navigation (strip images to avoid quota issues)
+  useEffect(() => {
+    if (!didRestoreRef.current) return;
+    try {
+      const threadToSave = thread.map((msg) =>
+        msg.role === "user" ? { ...msg, image: undefined } : msg
+      );
+      sessionStorage.setItem("gymbuddy:coach", JSON.stringify({ thread: threadToSave, coachConvId }));
+    } catch { /* storage full */ }
+  }, [thread, coachConvId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -164,13 +216,21 @@ export default function CoachPage() {
             "",
         };
         setThread((prev) => [...prev, assistantMsg]);
+
+        // Speak the response — use inline audio if available, else fetch TTS
+        if (result.tts_audio_b64) {
+          tts.speakFromBase64(result.tts_audio_b64);
+        } else {
+          const speakText = result.coach?.response.message ?? result.workout?.message ?? "";
+          if (speakText) tts.speak(speakText);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
         setLoading(false);
       }
     },
-    [coachConvId]
+    [coachConvId, tts]
   );
 
   // ---------------------------------------------------------------------------
@@ -215,6 +275,11 @@ export default function CoachPage() {
     [submitMessage, thread]
   );
 
+  // Override handleTranscriptRef to point to the VoiceInput-aware handler
+  useEffect(() => {
+    handleTranscriptRef.current = handleTranscript;
+  }, [handleTranscript]);
+
   // ---------------------------------------------------------------------------
   // Clear conversation
   // ---------------------------------------------------------------------------
@@ -223,6 +288,7 @@ export default function CoachPage() {
     setCoachConvId(null);
     setError(null);
     setPendingImage(null);
+    try { sessionStorage.removeItem("gymbuddy:coach"); } catch { /* ignore */ }
   }
 
   if (!ready) return null;
@@ -412,6 +478,8 @@ export default function CoachPage() {
           label="Or type your question:"
           placeholder="Ask about form, technique, or equipment..."
           submitLabel="Send"
+          onListenStart={wakeWord.pause}
+          onListenEnd={wakeWord.resume}
         />
       </div>
 
@@ -464,6 +532,15 @@ export default function CoachPage() {
           </div>
         </div>
       )}
+
+      {/* Wake word always-listening indicator */}
+      <WakeWordIndicator
+        isListening={wakeWord.isListening}
+        isActivated={wakeWord.isActivated}
+        interimText={wakeWord.interimText}
+        supported={wakeWord.supported}
+        isSpeaking={tts.isSpeaking}
+      />
     </main>
   );
 }

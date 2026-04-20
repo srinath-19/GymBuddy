@@ -1,60 +1,13 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-
-// ---------------------------------------------------------------------------
-// Web Speech API type declarations
-// These are not universally available in TypeScript's lib.dom.d.ts across all
-// configurations, so we declare them explicitly to stay strict-mode clean.
-// ---------------------------------------------------------------------------
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionResult {
-  readonly length: number;
-  isFinal: boolean;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionResultList {
-  readonly length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-}
-
-interface ISpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onstart: (() => void) | null;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  start(): void;
-  stop(): void;
-}
-
-interface SpeechRecognitionConstructor {
-  new (): ISpeechRecognition;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: SpeechRecognitionConstructor | undefined;
-    webkitSpeechRecognition: SpeechRecognitionConstructor | undefined;
-  }
-}
+import type {
+  ISpeechRecognition,
+  SpeechRecognitionEvent,
+  SpeechRecognitionErrorEvent,
+} from "@/lib/speech-types";
+// Side-effect import to ensure the global Window augmentation is loaded
+import "@/lib/speech-types";
 
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
@@ -62,6 +15,10 @@ interface VoiceInputProps {
   label?: string;
   placeholder?: string;
   submitLabel?: string;
+  /** Called right before manual speech recognition starts (e.g. to pause wake word) */
+  onListenStart?: () => void;
+  /** Called when manual speech recognition ends (e.g. to resume wake word) */
+  onListenEnd?: () => void;
 }
 
 export interface VoiceInputHandle {
@@ -76,6 +33,8 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
   label,
   placeholder = "e.g. bench press 3x10 at 135 lbs",
   submitLabel = "Log",
+  onListenStart,
+  onListenEnd,
 }, ref) {
   const [state, setState] = useState<RecognitionState>("idle");
   const [interimText, setInterimText] = useState("");
@@ -109,6 +68,9 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
+    // Notify parent to pause wake word listening
+    onListenStart?.();
+
     const resetSilenceTimer = () => {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
@@ -141,17 +103,21 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
         onTranscript(final);
         setInterimText("");
       }
+      // Notify parent to resume wake word listening
+      onListenEnd?.();
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       recognitionRef.current = null;
       setState("idle");
       setError(`Speech error: ${event.error}`);
+      // Resume wake word on error too
+      onListenEnd?.();
     };
 
     recognitionRef.current = recognition;
     recognition.start();
-  }, [onTranscript]);
+  }, [onTranscript, onListenStart, onListenEnd]);
 
   const stopListening = useCallback(() => {
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);

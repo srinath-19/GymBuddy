@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Literal
 
+logger = logging.getLogger(__name__)
+
 from agents import Agent, RunContextWrapper, Runner, function_tool
 
-from ..cache.redis_client import invalidate_user
+from ..cache.redis_client import invalidate_user, set_cached_workouts
 from ..data.muscle_ai import infer_muscles
 from ..data.session_muscles import get_expected_muscles
 from ..db.database import get_session
 from ..db.queries import (
     check_personal_record,
+    fetch_workouts,
     insert_muscle_targets,
     insert_workout,
 )
@@ -57,6 +61,19 @@ _EXERCISES_BY_MUSCLE: dict[str, list[str]] = {
     "core":       ["plank", "crunch", "leg raise", "cable crunch"],
     "traps":      ["shrug", "upright row", "face pull"],
 }
+
+
+# ---------------------------------------------------------------------------
+# Cache helper — mirrors _populate_workouts_cache in routes/workouts.py
+# ---------------------------------------------------------------------------
+
+async def _refresh_workouts_cache(user_id: uuid.UUID) -> None:
+    try:
+        async with get_session() as session:
+            fresh = await fetch_workouts(session, user_id=user_id, limit=50)
+        await set_cached_workouts(str(user_id), [r.model_dump(mode="json") for r in fresh])
+    except Exception:
+        logger.warning("Workouts cache refresh failed for user %s", user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +126,7 @@ async def _finalize_exercise(
     context.logged_workouts.append(record)
 
     await invalidate_user(str(context.user_id))
+    await _refresh_workouts_cache(context.user_id)
 
     pr_note = " New personal record!" if is_pr else ""
     return (
@@ -372,12 +390,27 @@ async def suggest_exercises(
 ) -> str:
     """
     Build a workout plan for a session type and store it.
-    Call this when the user wants to start a workout (e.g. "start my push workout",
-    "let's do chest day", "what should I do for legs?").
+    Call this ONLY when starting a brand-new session with no exercises yet.
+    Do NOT call this if exercises already exist — that would wipe the current plan.
 
     Args:
         session_type: Session label, lowercase (e.g. "push", "pull", "legs", "chest").
     """
+    state = ctx.context.session_state
+
+    # Guard: if a plan already exists, do not reset it. Just transition to active.
+    if state.exercise_progress:
+        remaining = [ep for ep in state.exercise_progress if not ep.finalized]
+        current = state.current_progress
+        if not current and remaining:
+            state.current_exercise_index = state.exercise_progress.index(remaining[0])
+            current = state.current_progress
+        names = ", ".join(ep.exercise.name for ep in remaining)
+        tags = " [PHASE:active]"
+        if current:
+            tags += f"[CURRENT_EXERCISE:{current.exercise.name}][CURRENT_SET:{current.sets_done + 1}]"
+        return f"Plan already set ({len(remaining)} exercises remaining): {names}. Starting now.{tags}"
+
     muscle_groups = get_expected_muscles(session_type)
     if not muscle_groups:
         return f"Unknown session type '{session_type}'. Try 'push', 'pull', 'legs', 'chest', 'back', 'arms', etc."
@@ -602,6 +635,11 @@ Every tool that changes state returns machine-readable tags. You MUST copy them 
 Never infer phase or rest time from the message text — always use the tags.
 
 ## Tool usage rules — when to call what
+- "start my push workout" / "let's do chest day" → call suggest_exercises() ONLY if no plan exists yet.
+  If a plan already exists (you can see exercises in conversation history or via get_session_progress),
+  DO NOT call suggest_exercises — it will wipe the plan. Instead set phase="active" and cue the first exercise.
+- "let's start" / "begin" / "let's go" / "start workout now" in planning phase → NO tool call.
+  Just set phase="active" with the first non-done exercise.
 - "done" / "finished" / "set done" / "got it" / "done, 10 at 135" → call mark_set_done()
 - "skip" / "next exercise" / "move on" / "let's do the next one" → call skip_exercise()
   (auto-logs partial sets if any; skips cleanly if none)

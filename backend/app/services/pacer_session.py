@@ -71,6 +71,17 @@ def save_state(session_id: str, state: PacerSessionState) -> None:
         entry["last_active"] = datetime.now(timezone.utc)
 
 
+def note_manual_action(session_id: str, description: str) -> None:
+    """Append a synthetic history note so the LLM knows about manual state changes."""
+    entry = pacer_sessions.get(session_id)
+    if entry is not None:
+        entry["history"].append({
+            "role": "assistant",
+            "content": f"[Plan updated via manual action] {description}",
+        })
+        entry["last_active"] = datetime.now(timezone.utc)
+
+
 def delete_session(session_id: str) -> None:
     pacer_sessions.pop(session_id, None)
 

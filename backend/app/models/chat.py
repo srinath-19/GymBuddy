@@ -23,5 +23,6 @@ class ChatResponse(BaseModel):
     workout: AgentActionResponse | None = None
     coach: CoachAPIResponse | None = None
     pacer: PacerAPIResponse | None = None
+    tts_audio_b64: str | None = None                 # inline MP3 audio — avoids a second round trip
 
 

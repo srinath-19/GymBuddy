@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from ..agents.orchestrator import run_orchestrator
 from ..auth.dependencies import get_current_user
 from ..models.chat import ChatRequest
+from .tts import generate_tts_b64
 from ..services.conversation import TurnLimitExceededError
 from ..services.pacer_session import PacerTurnLimitExceededError
 
@@ -57,6 +58,13 @@ async def chat(
 
     try:
         response = await run_orchestrator(body, user_id)
+        speak_text = (
+            response.coach.response.message if response.coach
+            else response.pacer.message if response.pacer
+            else response.workout.message if response.workout
+            else ""
+        )
+        response.tts_audio_b64 = await generate_tts_b64(speak_text)
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,

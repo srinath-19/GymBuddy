@@ -15,10 +15,11 @@ from ..auth.dependencies import get_current_user
 from ..models.pacer import (
     PacerContext,
     PacerPlanModifyRequest,
+    PacerResponse,
     PacerSetDoneRequest,
 )
-from ..models.workout import APIResponse
-from ..services.pacer_session import get_or_create, pacer_sessions, save_state
+from ..services.pacer_session import note_manual_action, pacer_sessions, save_state
+from .tts import generate_tts_b64
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/pacer", tags=["pacer"])
@@ -39,12 +40,12 @@ def _get_context(conv_id: str, user_id: UUID) -> tuple[PacerContext, dict]:
 # POST /pacer/{conv_id}/set-done
 # ---------------------------------------------------------------------------
 
-@router.post("/{conv_id}/set-done", response_model=APIResponse)
+@router.post("/{conv_id}/set-done", response_model=PacerResponse)
 async def pacer_set_done(
     conv_id: str,
     body: PacerSetDoneRequest,
     current_user: dict = Depends(get_current_user),
-) -> APIResponse:
+) -> PacerResponse:
     user_id = UUID(current_user["sub"])
     context, entry = _get_context(conv_id, user_id)
 
@@ -60,21 +61,23 @@ async def pacer_set_done(
         )
 
     save_state(conv_id, context.session_state)
+    note_manual_action(conv_id, message)
     response = build_direct_pacer_response(
         context, conv_id, entry["turn_count"], message, phase, rest_seconds
     )
-    return APIResponse(success=True, data=response)
+    response.tts_audio_b64 = await generate_tts_b64(message)
+    return PacerResponse(success=True, data=response)
 
 
 # ---------------------------------------------------------------------------
 # POST /pacer/{conv_id}/skip
 # ---------------------------------------------------------------------------
 
-@router.post("/{conv_id}/skip", response_model=APIResponse)
+@router.post("/{conv_id}/skip", response_model=PacerResponse)
 async def pacer_skip(
     conv_id: str,
     current_user: dict = Depends(get_current_user),
-) -> APIResponse:
+) -> PacerResponse:
     user_id = UUID(current_user["sub"])
     context, entry = _get_context(conv_id, user_id)
 
@@ -88,22 +91,24 @@ async def pacer_skip(
         )
 
     save_state(conv_id, context.session_state)
+    note_manual_action(conv_id, message)
     response = build_direct_pacer_response(
         context, conv_id, entry["turn_count"], message, phase, rest_seconds
     )
-    return APIResponse(success=True, data=response)
+    response.tts_audio_b64 = await generate_tts_b64(message)
+    return PacerResponse(success=True, data=response)
 
 
 # ---------------------------------------------------------------------------
 # POST /pacer/{conv_id}/plan  — remove / add / swap / change
 # ---------------------------------------------------------------------------
 
-@router.post("/{conv_id}/plan", response_model=APIResponse)
+@router.post("/{conv_id}/plan", response_model=PacerResponse)
 async def pacer_modify_plan(
     conv_id: str,
     body: PacerPlanModifyRequest,
     current_user: dict = Depends(get_current_user),
-) -> APIResponse:
+) -> PacerResponse:
     user_id = UUID(current_user["sub"])
     context, entry = _get_context(conv_id, user_id)
 
@@ -117,6 +122,7 @@ async def pacer_modify_plan(
     )
 
     save_state(conv_id, context.session_state)
+    note_manual_action(conv_id, message)
 
     state = context.session_state
     phase = "planning" if state.completed_count == 0 and all(
@@ -126,4 +132,5 @@ async def pacer_modify_plan(
     response = build_direct_pacer_response(
         context, conv_id, entry["turn_count"], message, phase  # type: ignore[arg-type]
     )
-    return APIResponse(success=True, data=response)
+    response.tts_audio_b64 = await generate_tts_b64(message)
+    return PacerResponse(success=True, data=response)
