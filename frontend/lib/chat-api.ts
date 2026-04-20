@@ -43,6 +43,7 @@ export interface PacerAPIResponse {
   current_exercise_sets_total: number;
   session_type: string | null;
   current_plan: PlanItem[];
+  tts_audio_b64?: string;
 }
 
 export interface ChatResponse {
@@ -50,6 +51,7 @@ export interface ChatResponse {
   workout: AgentActionResponse | null;
   coach: CoachAPIResponse | null;
   pacer: PacerAPIResponse | null;
+  tts_audio_b64?: string;
 }
 
 // ---------------------------------------------------------------------------
