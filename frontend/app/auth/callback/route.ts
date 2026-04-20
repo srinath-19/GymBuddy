@@ -34,6 +34,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Code missing or exchange failed — send back to login
+  // Code missing or exchange failed — send back to logins
   return NextResponse.redirect(`${origin}/login`);
 }

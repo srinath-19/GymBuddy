@@ -1,7 +1,6 @@
 import { createClient } from "./supabase/client";
 import type { PacerAPIResponse } from "./chat-api";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { getApiBaseUrl } from "./public-env";
 
 // ---------------------------------------------------------------------------
 // Typed manual actions — emitted by WorkoutPacer buttons, handled by the page
@@ -27,7 +26,7 @@ async function getToken(): Promise<string> {
 
 async function pacerFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     ...init,
   });

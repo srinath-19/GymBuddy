@@ -1,6 +1,5 @@
 import { createClient } from "./supabase/client";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { getApiBaseUrl } from "./public-env";
 
 export interface MuscleTargetResponse {
   muscle_group: string;
@@ -155,7 +154,7 @@ async function apiFetch<T>(
   init?: RequestInit
 ): Promise<APIResponse<T>> {
   const token = await getToken();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
@@ -199,7 +198,7 @@ export async function logWorkoutStreamed(
 ): Promise<AgentActionResponse> {
   const token = await getToken();
 
-  const response = await fetch(`${API_BASE}/api/v1/workouts/stream`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/workouts/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { getApiBaseUrl } from "./public-env";
 import { createClient } from "./supabase/client";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface UseTTSOptions {
   /** Voice to use (default "echo") */
@@ -103,7 +102,7 @@ export function useTTS({
 
       try {
         const token = await getToken();
-        const response = await fetch(`${API_BASE}/api/v1/tts`, {
+        const response = await fetch(`${getApiBaseUrl()}/api/v1/tts`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
