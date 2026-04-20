@@ -6,8 +6,11 @@ import { createClient } from "@/lib/supabase/client";
 import { sendChat, ChatResponse, PacerAPIResponse } from "@/lib/chat-api";
 import { pacerSetDone, pacerSkip, pacerModifyPlan, PacerManualAction } from "@/lib/pacer-api";
 import WorkoutPacer from "@/components/WorkoutPacer";
+import WakeWordIndicator from "@/components/WakeWordIndicator";
 import VoiceInput from "@/components/VoiceInput";
 import type { VoiceInputHandle } from "@/components/VoiceInput";
+import { useWakeWord } from "@/lib/useWakeWord";
+import { useTTS } from "@/lib/useTTS";
 
 // ---------------------------------------------------------------------------
 // Message thread types
@@ -46,18 +49,64 @@ export default function PacerPage() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const voiceInputRef = useRef<VoiceInputHandle | null>(null);
+  const didRestoreRef = useRef(false);
 
   // ---------------------------------------------------------------------------
-  // Auth check
+  // TTS — speak pacer responses
+  // ---------------------------------------------------------------------------
+  const [ttsSuppressed, setTtsSuppressed] = useState(false);
+  const tts = useTTS({
+    voice: "echo",
+    onStart: () => setTtsSuppressed(true),
+    onEnd: () => setTtsSuppressed(false),
+  });
+
+  // ---------------------------------------------------------------------------
+  // Wake word — always-on listening for "Gym Buddy"
+  // ---------------------------------------------------------------------------
+  const handleTranscriptRef = useRef<(text: string) => void>(() => {});
+  const wakeWord = useWakeWord({
+    onCommand: useCallback(
+      (cmd: string) => {
+        if (cmd.trim()) handleTranscriptRef.current(cmd);
+      },
+      []
+    ),
+    enabled: ready,
+    suppressed: ttsSuppressed || loading,
+  });
+
+  // ---------------------------------------------------------------------------
+  // Auth check + sessionStorage restore
   // ---------------------------------------------------------------------------
   useEffect(() => {
     createClient()
       .auth.getSession()
       .then(({ data }) => {
-        if (!data.session) router.replace("/login");
-        else setReady(true);
+        if (!data.session) {
+          router.replace("/login");
+        } else {
+          try {
+            const saved = sessionStorage.getItem("gymbuddy:pacer");
+            if (saved) {
+              const { thread: t, pacerConvId: id } = JSON.parse(saved) as { thread: ThreadMessage[]; pacerConvId: string | null };
+              if (t?.length) setThread(t);
+              if (id) setPacerConvId(id);
+            }
+          } catch { /* ignore */ }
+          didRestoreRef.current = true;
+          setReady(true);
+        }
       });
   }, [router]);
+
+  // Persist thread + convId across navigation
+  useEffect(() => {
+    if (!didRestoreRef.current) return;
+    try {
+      sessionStorage.setItem("gymbuddy:pacer", JSON.stringify({ thread, pacerConvId }));
+    } catch { /* storage full */ }
+  }, [thread, pacerConvId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -113,14 +162,27 @@ export default function PacerPage() {
             "",
         };
         setThread((prev) => [...prev, assistantMsg]);
+
+        // Speak the response — use inline audio if available, else fetch TTS
+        if (result.tts_audio_b64) {
+          tts.speakFromBase64(result.tts_audio_b64);
+        } else {
+          const speakText = result.pacer?.message ?? result.workout?.message ?? "";
+          if (speakText) tts.speak(speakText);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
         setLoading(false);
       }
     },
-    [pacerConvId]
+    [pacerConvId, tts]
   );
+
+  // Keep ref in sync
+  useEffect(() => {
+    handleTranscriptRef.current = handleTranscript;
+  }, [handleTranscript]);
 
   // ---------------------------------------------------------------------------
   // Manual action handler — calls REST endpoints directly, no LLM roundtrip
@@ -155,13 +217,19 @@ export default function PacerPage() {
         setLatestPhase(pacer.phase);
         setLatestRestSeconds(pacer.rest_seconds);
         setThread((prev) => [...prev, { role: "assistant" as const, pacer, text: pacer.message }]);
+        // Speak manual action responses — use inline audio if available, else fetch TTS
+        if (pacer.tts_audio_b64) {
+          tts.speakFromBase64(pacer.tts_audio_b64);
+        } else if (pacer.message) {
+          tts.speak(pacer.message);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
         setLoading(false);
       }
     },
-    [pacerConvId]
+    [pacerConvId, tts]
   );
 
   // ---------------------------------------------------------------------------
@@ -177,6 +245,7 @@ export default function PacerPage() {
     setError(null);
     setLatestPhase(null);
     setLatestRestSeconds(null);
+    try { sessionStorage.removeItem("gymbuddy:pacer"); } catch { /* ignore */ }
   }
 
   if (!ready) return null;
@@ -388,8 +457,19 @@ export default function PacerPage() {
           label="Or type a command:"
           placeholder="'start my push workout', 'done', 'done 10 at 155'..."
           submitLabel="Send"
+          onListenStart={wakeWord.pause}
+          onListenEnd={wakeWord.resume}
         />
       </div>
+
+      {/* Wake word always-listening indicator */}
+      <WakeWordIndicator
+        isListening={wakeWord.isListening}
+        isActivated={wakeWord.isActivated}
+        interimText={wakeWord.interimText}
+        supported={wakeWord.supported}
+        isSpeaking={tts.isSpeaking}
+      />
     </main>
   );
 }
