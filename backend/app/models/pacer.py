@@ -160,3 +160,11 @@ class PacerAPIResponse(BaseModel):
     session_type: str | None = None
     current_plan: list[PlanItem] = []
     """Live plan with per-exercise progress, populated at every phase."""
+    tts_audio_b64: str | None = None                 # inline MP3 audio — avoids a second round trip
+
+
+class PacerResponse(BaseModel):
+    """Envelope used by direct pacer REST endpoints."""
+    success: bool
+    data: PacerAPIResponse | None = None
+    error: str | None = None
