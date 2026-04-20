@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -15,6 +16,18 @@ from .routes.tts import router as tts_router
 from .routes.workouts import router
 
 logger = logging.getLogger(__name__)
+
+
+def _get_allowed_origins() -> list[str]:
+    raw_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+    if raw_origins:
+        return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+    frontend_url = os.environ.get("FRONTEND_URL", "").strip()
+    if frontend_url:
+        return [frontend_url]
+
+    return ["http://localhost:3000"]
 
 
 @asynccontextmanager
@@ -33,7 +46,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
