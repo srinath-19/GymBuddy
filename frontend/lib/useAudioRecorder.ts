@@ -29,6 +29,72 @@ function pickMimeType(): string {
   return ""; // Let the browser fall back to its own default.
 }
 
+// ---------------------------------------------------------------------------
+// Microphone acquisition.
+//
+// Audio processing hints are requested as `ideal` rather than as bare booleans.
+// A bare boolean in the basic constraint set is *required*, and an Android device
+// whose capture stack cannot offer (say) autoGainControl then matches no device
+// at all — surfacing as NotFoundError, i.e. "no microphone", on a phone that
+// plainly has one. Requesting them as ideal makes them advisory, and the bare
+// `audio: true` retry covers stacks that reject the dictionary form outright.
+// ---------------------------------------------------------------------------
+const AUDIO_CONSTRAINTS: MediaStreamConstraints[] = [
+  {
+    audio: {
+      // Matters far more on a phone than a laptop: the TTS reply plays out of
+      // the loudspeaker straight back into the mic, and gyms are loud.
+      echoCancellation: { ideal: true },
+      noiseSuppression: { ideal: true },
+      autoGainControl: { ideal: true },
+    },
+  },
+  { audio: true },
+];
+
+type MicResult = { stream: MediaStream } | { error: string };
+
+function describeMicError(err: unknown): string {
+  const name = err instanceof DOMException ? err.name : "";
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Microphone access was denied. Enable it for this site in your browser settings.";
+    case "NotFoundError":
+      return "No microphone was found on this device.";
+    case "NotReadableError":
+      return "The microphone is already in use by another app. Close it and try again.";
+    case "OverconstrainedError":
+      return "This device's microphone could not be configured for recording.";
+    default:
+      // The DOMException name is included deliberately: without it, a failure on
+      // a device we cannot reproduce locally is unattributable guesswork.
+      return name
+        ? `Could not start recording (${name}).`
+        : "Could not start recording — microphone unavailable.";
+  }
+}
+
+async function acquireMicrophone(): Promise<MicResult> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return { error: "This browser cannot record audio." };
+  }
+
+  let lastError: unknown = null;
+  for (const constraints of AUDIO_CONSTRAINTS) {
+    try {
+      return { stream: await navigator.mediaDevices.getUserMedia(constraints) };
+    } catch (err) {
+      lastError = err;
+      // A denied permission will not be granted by relaxing the constraints, so
+      // stop rather than prompting the user a second time.
+      const name = err instanceof DOMException ? err.name : "";
+      if (name === "NotAllowedError" || name === "SecurityError") break;
+    }
+  }
+  return { error: describeMicError(lastError) };
+}
+
 /** Filename extension matching a recorder mime type — OpenAI parses the container from it. */
 export function extensionForMimeType(mimeType: string): string {
   const base = mimeType.split(";")[0].trim().toLowerCase();
@@ -225,27 +291,9 @@ export function useAudioRecorder({
       return { ok: false, error: message };
     };
 
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          // Matters far more on a phone than a laptop: the TTS reply plays out of
-          // the loudspeaker straight back into the mic, and gyms are loud.
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-    } catch (err) {
-      const name = err instanceof DOMException ? err.name : "";
-      return fail(
-        name === "NotAllowedError" || name === "SecurityError"
-          ? "Microphone access was denied. Enable it for this site in your browser settings."
-          : name === "NotFoundError"
-            ? "No microphone was found."
-            : "Could not start recording."
-      );
-    }
+    const mic = await acquireMicrophone();
+    if ("error" in mic) return fail(mic.error);
+    const stream = mic.stream;
 
     const type = pickMimeType();
     let recorder: MediaRecorder;
