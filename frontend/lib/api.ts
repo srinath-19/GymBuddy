@@ -203,16 +203,19 @@ export async function transcribeAudio(
     body: form,
   });
 
-  let json: (APIResponse<{ text: string }> & { detail?: string }) | null = null;
+  if (!response.ok) {
+    throw await describeHttpFailure(response, "/api/v1/transcribe");
+  }
+
+  let json: APIResponse<{ text: string }> | null = null;
   try {
     json = await response.json();
   } catch {
     throw new Error(`HTTP ${response.status}: non-JSON response from server`);
   }
 
-  if (!response.ok || !json?.success) {
-    // FastAPI's HTTPException returns { detail } rather than the usual envelope.
-    throw new Error(json?.error ?? json?.detail ?? `HTTP ${response.status}`);
+  if (!json?.success) {
+    throw new Error(json?.error ?? "Transcription failed");
   }
   return json.data?.text?.trim() ?? "";
 }
@@ -234,15 +237,37 @@ type WorkoutStreamEvent =
   | { type: "done"; data: AgentActionResponse }
   | { type: "error"; message: string };
 
+/**
+ * Turns a failed response into an error that names what actually went wrong.
+ *
+ * FastAPI answers an unknown route with a bare `{"detail":"Not Found"}`, which
+ * renders as "Not Found" and says nothing about *what* was not found — it reads
+ * like the app lost your data rather than like the endpoint is missing. A 404
+ * here almost always means the backend is running a build without this route.
+ */
+async function describeHttpFailure(response: Response, path: string): Promise<Error> {
+  const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };
+  const detail = body?.error ?? body?.detail;
+
+  if (response.status === 404) {
+    return new Error(
+      `Server has no ${path} endpoint (HTTP 404) — the backend may be running an older deploy.`
+    );
+  }
+  return new Error(
+    detail ? `${detail} (HTTP ${response.status})` : `HTTP ${response.status} from ${path}`
+  );
+}
+
 /** Consumes an NDJSON agent stream, forwarding progress until the result arrives. */
 async function readAgentStream(
   response: Response,
+  path: string,
   onProgress: (message: string) => void,
   onTranscript?: (text: string) => void,
 ): Promise<AgentActionResponse> {
   if (!response.ok) {
-    const err = await response.json().catch(() => ({})) as { error?: string; detail?: string };
-    throw new Error(err?.error ?? err?.detail ?? `HTTP ${response.status}`);
+    throw await describeHttpFailure(response, path);
   }
 
   const reader = response.body!.getReader();
@@ -290,7 +315,7 @@ export async function logWorkoutStreamed(
     body: JSON.stringify({ transcript, client_tz: clientTz() }),
   });
 
-  return readAgentStream(response, onProgress);
+  return readAgentStream(response, "/api/v1/workouts/stream", onProgress);
 }
 
 /**
@@ -319,7 +344,12 @@ export async function logWorkoutFromAudioStreamed(
     body: form,
   });
 
-  return readAgentStream(response, onProgress, onTranscript);
+  return readAgentStream(
+    response,
+    "/api/v1/workouts/stream/audio",
+    onProgress,
+    onTranscript
+  );
 }
 
 export async function getWorkouts(limit = 50): Promise<WorkoutLogResponse[]> {
