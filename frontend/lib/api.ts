@@ -175,13 +175,54 @@ async function apiFetch<T>(
   return json;
 }
 
+/** The browser's IANA timezone — the backend needs it to resolve calendar dates. */
+export function clientTz(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/**
+ * Transcribes a recorded audio clip server-side.
+ *
+ * Used instead of the browser Web Speech API on phones, whose platform
+ * recognizers return duplicated and truncated transcripts. See
+ * `backend/app/routes/transcribe.py`.
+ */
+export async function transcribeAudio(
+  audio: Blob,
+  filename: string
+): Promise<string> {
+  const token = await getToken();
+  const form = new FormData();
+  form.append("file", audio, filename);
+
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/transcribe`, {
+    method: "POST",
+    // Content-Type is deliberately unset — the browser has to add the multipart
+    // boundary itself, and setting it manually corrupts the request body.
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  let json: (APIResponse<{ text: string }> & { detail?: string }) | null = null;
+  try {
+    json = await response.json();
+  } catch {
+    throw new Error(`HTTP ${response.status}: non-JSON response from server`);
+  }
+
+  if (!response.ok || !json?.success) {
+    // FastAPI's HTTPException returns { detail } rather than the usual envelope.
+    throw new Error(json?.error ?? json?.detail ?? `HTTP ${response.status}`);
+  }
+  return json.data?.text?.trim() ?? "";
+}
+
 export async function logWorkout(
   transcript: string
 ): Promise<AgentActionResponse> {
-  const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const result = await apiFetch<AgentActionResponse>("/api/v1/workouts", {
     method: "POST",
-    body: JSON.stringify({ transcript, client_tz: clientTz }),
+    body: JSON.stringify({ transcript, client_tz: clientTz() }),
   });
   if (!result.data) throw new Error("No data returned from server");
   return result.data;
@@ -204,7 +245,7 @@ export async function logWorkoutStreamed(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ transcript, client_tz: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    body: JSON.stringify({ transcript, client_tz: clientTz() }),
   });
 
   if (!response.ok) {
@@ -252,7 +293,8 @@ export interface ManualWorkoutRequest {
   weight: number;
   weight_unit: "lbs" | "kg";
   notes?: string;
-  logged_at?: string;  // "YYYY-MM-DD" — omit for today
+  logged_at?: string;   // "YYYY-MM-DD" — omit for now
+  client_tz?: string;   // IANA zone that logged_at's calendar day is relative to
 }
 
 export interface WorkoutUpdateRequest {
@@ -294,7 +336,9 @@ export async function deleteWorkout(id: string): Promise<void> {
 }
 
 export async function getSessions(days = 90): Promise<WorkoutSession[]> {
-  const result = await apiFetch<WorkoutSession[]>(`/api/v1/sessions?days=${days}`);
+  const result = await apiFetch<WorkoutSession[]>(
+    `/api/v1/sessions?days=${days}&tz=${encodeURIComponent(clientTz())}`
+  );
   return result.data ?? [];
 }
 
