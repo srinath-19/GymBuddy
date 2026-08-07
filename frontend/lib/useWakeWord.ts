@@ -12,6 +12,7 @@ import {
   describeSpeechError,
   getSpeechRecognitionCtor,
   isFatalSpeechError,
+  isMobileBrowser,
   splitTranscript,
   supportsContinuous,
 } from "@/lib/speech";
@@ -80,7 +81,9 @@ interface UseWakeWordReturn {
   isActivated: boolean;
   /** Current interim text being recognized */
   interimText: string;
-  /** Whether the browser supports speech recognition */
+  /** Whether hands-free wake word listening is available here. False on mobile —
+   *  see the feature-detection effect for why. Consumers use this to hide wake
+   *  word UI entirely. */
   supported: boolean;
   /** Set when listening stopped for a reason the user has to fix (e.g. mic blocked) */
   error: string | null;
@@ -126,9 +129,16 @@ export function useWakeWord({
   useEffect(() => { onCommandRef.current = onCommand; }, [onCommand]);
   useEffect(() => { suppressedRef.current = suppressed; }, [suppressed]);
 
-  // Feature detection
+  // Feature detection.
+  //
+  // Deliberately off on phones. Android's SpeechRecognizer cannot listen
+  // continuously, so an always-on hotword has to be emulated by restarting the
+  // recognizer after every single utterance — and each restart re-acquires the
+  // microphone with an audible beep, drains the battery, and is throttled the
+  // moment the tab is backgrounded. On mobile the Speak button records and
+  // transcribes server-side instead, which is both reliable and more accurate.
   useEffect(() => {
-    setSupported(getSpeechRecognitionCtor() != null);
+    setSupported(getSpeechRecognitionCtor() != null && !isMobileBrowser());
   }, []);
 
   const clearSilenceTimer = useCallback(() => {
