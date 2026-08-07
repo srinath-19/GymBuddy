@@ -22,14 +22,28 @@ export function getSpeechRecognitionCtor(): SpeechRecognitionConstructor | null 
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
+/** Chromium's User-Agent Client Hints. Not in lib.dom, and absent on Safari/Firefox. */
+interface NavigatorUAData {
+  mobile: boolean;
+}
+
 /**
  * True on phones and tablets.
  *
- * iPadOS 13+ reports a desktop Mac user agent, so it is identified by the fact
- * that no real Mac reports multiple touch points.
+ * Checked in three steps, most reliable first:
+ *  1. `navigator.userAgentData.mobile` — the standards-track answer, and the only
+ *     one that stays correct when Android's "Request desktop site" rewrites the
+ *     user agent string. Chromium only, which covers Android Chrome.
+ *  2. The user agent string, for Safari and Firefox.
+ *  3. iPadOS 13+ reports a desktop Mac user agent, so it is identified by the
+ *     fact that no real Mac reports multiple touch points.
  */
 export function isMobileBrowser(): boolean {
   if (typeof navigator === "undefined") return false;
+
+  const uaData = (navigator as Navigator & { userAgentData?: NavigatorUAData }).userAgentData;
+  if (typeof uaData?.mobile === "boolean") return uaData.mobile;
+
   if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return true;
   return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
