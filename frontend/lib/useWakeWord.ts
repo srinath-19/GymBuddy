@@ -7,6 +7,14 @@ import type {
   SpeechRecognitionErrorEvent,
 } from "@/lib/speech-types";
 import "@/lib/speech-types";
+import {
+  combinedTranscript,
+  describeSpeechError,
+  getSpeechRecognitionCtor,
+  isFatalSpeechError,
+  splitTranscript,
+  supportsContinuous,
+} from "@/lib/speech";
 
 // ---------------------------------------------------------------------------
 // Wake word patterns — matches "gym buddy", "hey gym buddy", etc
@@ -21,6 +29,18 @@ const WAKE_PATTERNS = [
   /\bgive\s*buddy\b/i,      // "give buddy" — hard-g mis-hear
   /\bjim\s*body\b/i,        // "jim body" — combined mis-transcription
 ];
+
+/** Passive matching only considers the tail of the session transcript, so a long
+ *  desktop session does not re-scan minutes of accumulated speech on every event. */
+const PASSIVE_WINDOW_CHARS = 300;
+
+/** Base delay before re-arming the recognizer, doubled on consecutive failures. */
+const RESTART_MS = 300;
+const MAX_RESTART_MS = 5000;
+
+/** Extra settle time when starting after TTS, so the tail of the spoken reply
+ *  coming out of a phone's loudspeaker is not transcribed as user speech. */
+const RESUME_SETTLE_MS = 400;
 
 function extractCommand(transcript: string): string | null {
   for (const pattern of WAKE_PATTERNS) {
@@ -62,6 +82,8 @@ interface UseWakeWordReturn {
   interimText: string;
   /** Whether the browser supports speech recognition */
   supported: boolean;
+  /** Set when listening stopped for a reason the user has to fix (e.g. mic blocked) */
+  error: string | null;
   /** Temporarily pause wake word listening (e.g. when manual Speak button is used) */
   pause: () => void;
   /** Resume wake word listening after a pause */
@@ -78,17 +100,27 @@ export function useWakeWord({
   const [isActivated, setIsActivated] = useState(false);
   const [interimText, setInterimText] = useState("");
   const [supported, setSupported] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
-  const intentionalStopRef = useRef(false);
   const activatedRef = useRef(false);
   const commandBufferRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCommandRef = useRef(onCommand);
   const suppressedRef = useRef(suppressed);
   const pausedRef = useRef(false);
   // Prevents ghost recognizer from restarting after component unmounts
   const destroyedRef = useRef(false);
+  // Whether listening is wanted right now. Kept as a ref because `onend` fires
+  // asynchronously after `abort()` — by then the effect has already re-run, so
+  // reading `enabled`/`suppressed` from a closure would restart a hook that was
+  // just switched off.
+  const shouldListenRef = useRef(false);
+  // Set when the mic is blocked or missing — retrying cannot help until the user acts.
+  const fatalRef = useRef(false);
+  const consecutiveErrorsRef = useRef(0);
+  const listeningRef = useRef(false);
 
   // Keep refs in sync with latest props
   useEffect(() => { onCommandRef.current = onCommand; }, [onCommand]);
@@ -96,8 +128,7 @@ export function useWakeWord({
 
   // Feature detection
   useEffect(() => {
-    const API = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    setSupported(API != null);
+    setSupported(getSpeechRecognitionCtor() != null);
   }, []);
 
   const clearSilenceTimer = useCallback(() => {
@@ -107,136 +138,150 @@ export function useWakeWord({
     }
   }, []);
 
-  const startListening = useCallback(() => {
-    const API = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+  const startListening = useCallback((delayMs = 0) => {
+    const API = getSpeechRecognitionCtor();
     if (!API) return;
 
-    // Don't start if suppressed (TTS playing), paused (manual Speak), or destroyed (unmounted)
-    if (suppressedRef.current || pausedRef.current || destroyedRef.current) return;
+    // Don't start if switched off, suppressed (TTS), paused (manual Speak),
+    // destroyed (unmounted), or already stopped for an unrecoverable reason.
+    if (
+      !shouldListenRef.current ||
+      suppressedRef.current ||
+      pausedRef.current ||
+      destroyedRef.current ||
+      fatalRef.current
+    ) {
+      return;
+    }
+
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+    if (delayMs > 0) {
+      restartTimerRef.current = setTimeout(() => startListening(0), delayMs);
+      return;
+    }
 
     // Clean up any existing instance
     if (recognitionRef.current) {
-      intentionalStopRef.current = true;
       try { recognitionRef.current.abort(); } catch { /* ignore */ }
       recognitionRef.current = null;
     }
 
     const recognition = new API();
-    recognition.continuous = true;
+    // Android's SpeechRecognizer has no continuous mode (Chromium bug 40324711) —
+    // asking for it yields a session that dies after one utterance or never fires
+    // `onend` at all, so mobile emulates it with the restart loop in `onend`.
+    recognition.continuous = supportsContinuous();
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
+    // Set once a command has been handed off, so the trailing results of this
+    // dying session are not re-matched against the wake word that just fired.
+    let handedOff = false;
+
     recognition.onstart = () => {
+      consecutiveErrorsRef.current = 0;
+      listeningRef.current = true;
       setIsListening(true);
+      setError(null);
+    };
+
+    /** Finish an activation: hand the command over and re-arm the recognizer. */
+    const completeActivation = (submit: boolean) => {
+      if (submit) {
+        const cmd = extractCommand(commandBufferRef.current);
+        if (cmd && cmd.length > 0) onCommandRef.current(cmd);
+      }
+      activatedRef.current = false;
+      setIsActivated(false);
+      setInterimText("");
+      commandBufferRef.current = "";
+      handedOff = true;
+      try { recognition.stop(); } catch { /* ignore */ }
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (handedOff) return;
+
+      // Committed and in-progress text are kept apart here. Concatenating every
+      // entry in `results` is what produced the repeated-word transcripts on
+      // phones, where each interim revision is appended rather than replacing
+      // the previous one.
+      const split = splitTranscript(event.results);
+      const transcript = combinedTranscript(split);
+      if (!transcript) return;
+
       if (activatedRef.current) {
-        // Command capture mode: use full accumulated transcript for extraction
-        const parts: string[] = [];
-        for (let i = 0; i < event.results.length; i++) {
-          parts.push(event.results[i][0].transcript);
-        }
-        const fullTranscript = parts.join("").trim();
-        commandBufferRef.current = fullTranscript;
-        setInterimText(fullTranscript);
+        commandBufferRef.current = transcript;
+        setInterimText(transcript);
 
         // Silence timer — fires when user stops speaking for commandSilenceMs
         clearSilenceTimer();
-        silenceTimerRef.current = setTimeout(() => {
-          const cmd = extractCommand(commandBufferRef.current);
-          if (cmd && cmd.length > 0) {
-            onCommandRef.current(cmd);
-          }
-          activatedRef.current = false;
-          setIsActivated(false);
-          setInterimText("");
-          commandBufferRef.current = "";
-          intentionalStopRef.current = true;
-          try { recognition.stop(); } catch { /* ignore */ }
-        }, commandSilenceMs);
+        silenceTimerRef.current = setTimeout(() => completeActivation(true), commandSilenceMs);
+        return;
+      }
 
+      const recent = transcript.length > PASSIVE_WINDOW_CHARS
+        ? transcript.slice(-PASSIVE_WINDOW_CHARS)
+        : transcript;
+
+      if (!containsWakeWord(recent)) return;
+
+      activatedRef.current = true;
+      setIsActivated(true);
+      commandBufferRef.current = recent;
+      setInterimText(recent);
+
+      const immediateCmd = extractCommand(recent);
+      clearSilenceTimer();
+      if (immediateCmd && immediateCmd.length > 3) {
+        // "gym buddy <command>" arrived in one breath — wait for them to finish.
+        silenceTimerRef.current = setTimeout(() => completeActivation(true), commandSilenceMs);
       } else {
-        // Passive mode: look back 2 extra slots so wake words split across result
-        // boundaries (Chrome can finalize "gym" and "buddy" separately) still match
-        const newParts: string[] = [];
-        const checkFrom = Math.max(0, event.resultIndex - 2);
-        for (let i = checkFrom; i < event.results.length; i++) {
-          newParts.push(event.results[i][0].transcript);
-        }
-        const latestText = newParts.join("").trim();
-
-        if (containsWakeWord(latestText)) {
-          const immediateCmd = extractCommand(latestText);
-
-          if (immediateCmd && immediateCmd.length > 3) {
-            // User said "gym buddy <command>" all in one go — wait for silence
-            activatedRef.current = true;
-            setIsActivated(true);
-            commandBufferRef.current = latestText;
-            setInterimText(latestText);
-
-            clearSilenceTimer();
-            silenceTimerRef.current = setTimeout(() => {
-              const cmd = extractCommand(commandBufferRef.current);
-              if (cmd && cmd.length > 0) {
-                onCommandRef.current(cmd);
-              }
-              activatedRef.current = false;
-              setIsActivated(false);
-              setInterimText("");
-              commandBufferRef.current = "";
-              intentionalStopRef.current = true;
-              try { recognition.stop(); } catch { /* ignore */ }
-            }, commandSilenceMs);
-          } else {
-            // Wake word only detected — waiting for command to follow
-            activatedRef.current = true;
-            setIsActivated(true);
-            commandBufferRef.current = latestText;
-            setInterimText(latestText);
-
-            clearSilenceTimer();
-            silenceTimerRef.current = setTimeout(() => {
-              activatedRef.current = false;
-              setIsActivated(false);
-              setInterimText("");
-              commandBufferRef.current = "";
-              intentionalStopRef.current = true;
-              try { recognition.stop(); } catch { /* ignore */ }
-            }, commandSilenceMs * 2);
-          }
-        }
+        // Wake word alone — give them longer to actually say something.
+        silenceTimerRef.current = setTimeout(() => completeActivation(false), commandSilenceMs * 2);
       }
     };
 
     recognition.onend = () => {
       recognitionRef.current = null;
+      listeningRef.current = false;
       setIsListening(false);
 
-      if (intentionalStopRef.current) {
-        intentionalStopRef.current = false;
-        // Auto-restart after a brief pause — but NOT if the component has unmounted
-        if (!destroyedRef.current && enabled && !suppressedRef.current && !pausedRef.current) {
-          setTimeout(() => {
-            startListening();
-          }, 300);
-        }
-      } else {
-        // Unintentional stop (Chrome auto-stops after silence) — restart
-        if (!destroyedRef.current && enabled && !suppressedRef.current && !pausedRef.current) {
-          setTimeout(() => {
-            startListening();
-          }, 300);
-        }
+      if (
+        destroyedRef.current ||
+        !shouldListenRef.current ||
+        suppressedRef.current ||
+        pausedRef.current ||
+        fatalRef.current
+      ) {
+        return;
       }
+
+      // Both paths restart: an intentional stop re-arms after handling a command,
+      // and an unintentional one is either Chrome's silence timeout or Android
+      // ending the session after a single utterance.
+      const backoff = Math.min(
+        RESTART_MS * 2 ** consecutiveErrorsRef.current,
+        MAX_RESTART_MS
+      );
+      startListening(backoff);
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // "no-speech" and "aborted" are normal — just restart
-      if (event.error === "no-speech" || event.error === "aborted") {
-        return; // onend will fire and handle restart
+      // "no-speech" and "aborted" are routine — onend restarts us.
+      if (event.error === "no-speech" || event.error === "aborted") return;
+
+      if (isFatalSpeechError(event.error)) {
+        fatalRef.current = true;
+        setError(describeSpeechError(event.error));
+        return;
       }
+      // Transient (e.g. "network"): count it so onend backs off instead of
+      // hammering the recognizer in a tight restart loop.
+      consecutiveErrorsRef.current = Math.min(consecutiveErrorsRef.current + 1, 5);
       console.warn("[useWakeWord] Speech error:", event.error);
     };
 
@@ -244,14 +289,19 @@ export function useWakeWord({
     try {
       recognition.start();
     } catch {
-      // Already started or other issue — retry after delay
-      setTimeout(() => startListening(), 500);
+      // Already started, or the mic is still held by something else — back off.
+      consecutiveErrorsRef.current = Math.min(consecutiveErrorsRef.current + 1, 5);
+      recognitionRef.current = null;
+      startListening(Math.min(RESTART_MS * 2 ** consecutiveErrorsRef.current, MAX_RESTART_MS));
     }
-  }, [enabled, commandSilenceMs, clearSilenceTimer]);
+  }, [commandSilenceMs, clearSilenceTimer]);
 
   const stopListening = useCallback(() => {
     clearSilenceTimer();
-    intentionalStopRef.current = true;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
     activatedRef.current = false;
     setIsActivated(false);
     setInterimText("");
@@ -260,23 +310,46 @@ export function useWakeWord({
       try { recognitionRef.current.abort(); } catch { /* ignore */ }
       recognitionRef.current = null;
     }
+    listeningRef.current = false;
     setIsListening(false);
   }, [clearSilenceTimer]);
 
   // Start/stop based on enabled + suppressed
   useEffect(() => {
+    const active = enabled && !suppressed && supported;
+    // Both flags are set before anything is started or stopped, so the `onend`
+    // that `abort()` triggers a moment later reads the intent of this run.
+    shouldListenRef.current = active;
     destroyedRef.current = false; // reset on each effect run (handles re-mount)
-    if (enabled && !suppressed && supported) {
-      startListening();
+    if (active) {
+      // Settle first: coming out of `suppressed` means TTS just finished, and on a
+      // phone the loudspeaker tail would otherwise be picked straight back up.
+      startListening(RESUME_SETTLE_MS);
     } else {
       stopListening();
     }
     return () => {
+      shouldListenRef.current = false;
       destroyedRef.current = true; // prevent ghost recognizer from restarting after unmount
       stopListening();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, suppressed, supported]);
+
+  // Mobile browsers drop the microphone when the tab is backgrounded or the phone
+  // is locked, and the recognizer never comes back on its own.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      if (listeningRef.current || !shouldListenRef.current) return;
+      if (pausedRef.current || fatalRef.current) return;
+      consecutiveErrorsRef.current = 0;
+      startListening(RESTART_MS);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [startListening]);
 
   const pause = useCallback(() => {
     pausedRef.current = true;
@@ -285,10 +358,10 @@ export function useWakeWord({
 
   const resume = useCallback(() => {
     pausedRef.current = false;
-    if (enabled && !suppressed && supported) {
-      startListening();
-    }
-  }, [enabled, suppressed, supported, startListening]);
+    consecutiveErrorsRef.current = 0;
+    // startListening is a no-op unless listening is actually wanted right now.
+    startListening(RESUME_SETTLE_MS);
+  }, [startListening]);
 
-  return { isListening, isActivated, interimText, supported, pause, resume };
+  return { isListening, isActivated, interimText, supported, error, pause, resume };
 }

@@ -376,6 +376,7 @@ export default function PacerPage() {
         isActivated={wakeWord.isActivated}
         interimText={wakeWord.interimText}
         supported={wakeWord.supported}
+        error={wakeWord.error}
         isSpeaking={tts.isSpeaking}
       />
     </main>

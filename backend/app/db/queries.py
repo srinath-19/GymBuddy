@@ -387,18 +387,22 @@ async def get_exercise_pr(
 
 
 async def get_sessions(
-    session: AsyncSession, user_id: uuid.UUID, days: int = 7
+    session: AsyncSession, user_id: uuid.UUID, days: int = 7, tz: str = "UTC"
 ) -> list[WorkoutSession]:
-    """Return workout sessions for the past N days, newest first."""
+    """Return workout sessions for the past N days, newest first.
+
+    The window is measured from *today in `tz`* — using the UTC date instead would
+    drop or add a day at the edge for anyone not on UTC.
+    """
     result = await session.execute(
         text("""
             SELECT id, user_id, date, session_type, notes, created_at
             FROM workout_sessions
             WHERE user_id = :user_id
-              AND date >= (NOW() AT TIME ZONE 'UTC')::date - CAST(:days AS integer)
+              AND date >= (NOW() AT TIME ZONE :tz)::date - CAST(:days AS integer)
             ORDER BY date DESC
         """),
-        {"user_id": user_id, "days": days},
+        {"user_id": user_id, "days": days, "tz": tz},
     )
     return [WorkoutSession(**row) for row in result.mappings().all()]
 

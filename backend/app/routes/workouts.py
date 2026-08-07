@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import date as Date, datetime, time, timezone
+from datetime import date as Date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -44,6 +44,7 @@ from ..models.workout import (
     WorkoutUpdateRequest,
     WorkoutRequest,
 )
+from ..utils.dates import anchor_local_date, safe_tz
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -58,10 +59,10 @@ async def _populate_workouts_cache(user_id: UUID) -> None:
         logger.warning("Workouts cache populate failed for user %s", user_id)
 
 
-async def _populate_sessions_cache(user_id: UUID) -> None:
+async def _populate_sessions_cache(user_id: UUID, tz: str = "UTC") -> None:
     try:
         async with get_session() as session:
-            fresh = await get_sessions(session, user_id, days=90)
+            fresh = await get_sessions(session, user_id, days=90, tz=tz)
         await set_cached_sessions(str(user_id), [r.model_dump(mode="json") for r in fresh])
     except Exception:
         logger.warning("Sessions cache populate failed for user %s", user_id)
@@ -93,7 +94,7 @@ async def create_workout_manual(
 
     logged_at_dt: datetime | None = None
     if body.logged_at:
-        logged_at_dt = datetime.combine(body.logged_at, time.min, tzinfo=timezone.utc)
+        logged_at_dt = anchor_local_date(body.logged_at, body.client_tz)
 
     try:
         async with get_session() as session:
@@ -212,6 +213,7 @@ async def create_workout_stream(
 )
 async def list_sessions(
     days: int = Query(default=7, ge=1, le=90),
+    tz: str = Query(default="UTC", description="IANA timezone name — anchors the day window"),
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse:
     user_id = UUID(current_user["sub"])
@@ -222,7 +224,7 @@ async def list_sessions(
 
     try:
         async with get_session() as session:
-            records = await get_sessions(session, user_id, days=days)
+            records = await get_sessions(session, user_id, days=days, tz=safe_tz(tz))
     except Exception as exc:
         logger.exception("Sessions fetch failed")
         raise HTTPException(
