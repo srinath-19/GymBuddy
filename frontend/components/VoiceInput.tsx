@@ -7,6 +7,16 @@ import type {
   SpeechRecognitionErrorEvent,
 } from "@/lib/speech-types";
 import "@/lib/speech-types";
+import {
+  combinedTranscript,
+  describeSpeechError,
+  getSpeechRecognitionCtor,
+  isMobileBrowser,
+  splitTranscript,
+  supportsContinuous,
+} from "@/lib/speech";
+import { extensionForMimeType, useAudioRecorder } from "@/lib/useAudioRecorder";
+import { transcribeAudio } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -25,7 +35,15 @@ export interface VoiceInputHandle {
   startListening: () => void;
 }
 
-type RecognitionState = "idle" | "listening";
+type RecognitionState = "idle" | "starting" | "listening" | "transcribing";
+
+/** Grace period for the wake-word recognizer to actually release the microphone.
+ *  `abort()` is asynchronous, and on Android acquiring the mic too soon afterwards
+ *  yields a dead session or an immediate `aborted` error. */
+const MIC_RELEASE_MS = 250;
+
+/** Below this, the clip is a stray tap rather than speech — not worth a round-trip. */
+const MIN_AUDIO_BYTES = 1200;
 
 const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceInput({
   onTranscript,
@@ -40,38 +58,117 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
   const [interimText, setInterimText] = useState("");
   const [textInput, setTextInput] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [useRecording, setUseRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const transcriptRef = useRef("");
+  const lastInterimRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finishRecordingRef = useRef<() => void>(() => {});
+  const stoppingRef = useRef(false);
+
+  const recorder = useAudioRecorder({
+    onAutoStop: () => finishRecordingRef.current(),
+  });
 
   useEffect(() => {
-    const API = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    setSpeechSupported(API != null);
+    setSpeechSupported(getSpeechRecognitionCtor() != null);
   }, []);
 
-  const startListening = useCallback(() => {
-    const API = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+  // Phones record audio and transcribe it server-side instead of using the Web
+  // Speech API: Android Chrome and iOS Safari delegate to platform recognizers
+  // that duplicate and truncate transcripts. Desktop Chrome's implementation is
+  // solid and stays on the local path, which avoids a network round-trip.
+  useEffect(() => {
+    setUseRecording(recorder.supported && isMobileBrowser());
+  }, [recorder.supported]);
+
+  // -------------------------------------------------------------------------
+  // Path A — record + server transcription (mobile)
+  // -------------------------------------------------------------------------
+  const finishRecording = useCallback(async () => {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setState("transcribing");
+    setInterimText("");
+
+    try {
+      const blob = await recorder.stop();
+      if (!blob || blob.size < MIN_AUDIO_BYTES) {
+        setError("Didn't catch that — try again.");
+        return;
+      }
+      // The blob carries the container the recorder actually chose, which is the
+      // authoritative value — on iOS it will be mp4 rather than the webm default.
+      const filename = `speech.${extensionForMimeType(blob.type || recorder.mimeType)}`;
+      const text = await transcribeAudio(blob, filename);
+      if (text) {
+        onTranscript(text);
+      } else {
+        setError("Didn't catch that — try again.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not transcribe audio.");
+    } finally {
+      stoppingRef.current = false;
+      setState("idle");
+      onListenEnd?.();
+    }
+  }, [recorder, onTranscript, onListenEnd]);
+
+  useEffect(() => {
+    finishRecordingRef.current = () => void finishRecording();
+  }, [finishRecording]);
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    setInterimText("");
+    setState("starting");
+    onListenStart?.();
+
+    // Let the always-on wake-word recognizer let go of the mic first.
+    await new Promise((resolve) => setTimeout(resolve, MIC_RELEASE_MS));
+
+    const result = await recorder.start();
+    if (!result.ok) {
+      setState("idle");
+      setError(result.error);
+      onListenEnd?.();
+      return;
+    }
+    setState("listening");
+  }, [recorder, onListenStart, onListenEnd]);
+
+  // -------------------------------------------------------------------------
+  // Path B — Web Speech API (desktop)
+  // -------------------------------------------------------------------------
+  const startSpeechRecognition = useCallback(async () => {
+    const API = getSpeechRecognitionCtor();
     if (!API) return;
 
     setError(null);
     setInterimText("");
     transcriptRef.current = "";
+    lastInterimRef.current = "";
+    setState("starting");
+    onListenStart?.();
+
+    // Same handoff race as the recording path — the wake-word recognizer's
+    // abort() has not released the microphone by the time this line runs.
+    await new Promise((resolve) => setTimeout(resolve, MIC_RELEASE_MS));
 
     const SILENCE_MS = 2000;
 
     const recognition: ISpeechRecognition = new API();
-    recognition.continuous = true;
+    recognition.continuous = supportsContinuous();
     recognition.interimResults = true;
     recognition.lang = "en-US";
-
-    onListenStart?.();
 
     const resetSilenceTimer = () => {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
-        recognition.stop();
+        try { recognition.stop(); } catch { /* already stopped */ }
       }, SILENCE_MS);
     };
 
@@ -81,21 +178,23 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const results = event.results;
-      const parts: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        parts.push(results[i][0].transcript);
-      }
-      const current = parts.join("");
-      setInterimText(current);
-      transcriptRef.current = current;
+      // Only committed (isFinal) results are accumulated; interim ones are shown
+      // as a live preview and discarded. Joining both is what produced repeated
+      // text like "bench press bench press 3 bench press 3 by 10".
+      const split = splitTranscript(event.results);
+      transcriptRef.current = split.final;
+      if (split.interim) lastInterimRef.current = split.interim;
+      setInterimText(combinedTranscript(split));
       resetSilenceTimer();
     };
 
     recognition.onend = () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       recognitionRef.current = null;
       setState("idle");
-      const final = transcriptRef.current.trim();
+      // Fall back to the last interim text if the engine ended without ever
+      // marking a result final — iOS Safari does this when it is cut off.
+      const final = (transcriptRef.current || lastInterimRef.current).trim();
       if (final) {
         onTranscript(final);
         setInterimText("");
@@ -104,20 +203,43 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       recognitionRef.current = null;
       setState("idle");
-      setError(`Speech error: ${event.error}`);
+      // "no-speech" just means the user never spoke — not worth an error banner.
+      if (event.error !== "no-speech" && event.error !== "aborted") {
+        setError(describeSpeechError(event.error));
+      }
       onListenEnd?.();
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setState("idle");
+      setError("Could not start listening. Try again.");
+      onListenEnd?.();
+    }
   }, [onTranscript, onListenStart, onListenEnd]);
 
+  // -------------------------------------------------------------------------
+  // Shared controls
+  // -------------------------------------------------------------------------
+  const startListening = useCallback(() => {
+    if (state !== "idle") return;
+    if (useRecording) void startRecording();
+    else void startSpeechRecognition();
+  }, [state, useRecording, startRecording, startSpeechRecognition]);
+
   const stopListening = useCallback(() => {
+    if (useRecording) {
+      void finishRecording();
+      return;
+    }
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    recognitionRef.current?.stop();
-  }, []);
+    try { recognitionRef.current?.stop(); } catch { /* already stopped */ }
+  }, [useRecording, finishRecording]);
 
   useImperativeHandle(ref, () => ({
     startListening,
@@ -132,6 +254,15 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
     }
   };
 
+  const micAvailable = useRecording || speechSupported;
+  const busy = state === "starting" || state === "transcribing";
+
+  const buttonLabel =
+    state === "listening" ? "🎙 Stop"
+      : state === "starting" ? "… Starting"
+        : state === "transcribing" ? "… Transcribing"
+          : "🎤 Speak";
+
   return (
     <div className="flex flex-col gap-4">
       {error && (
@@ -140,12 +271,12 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
         </p>
       )}
 
-      {speechSupported && (
+      {micAvailable && (
         <div className="flex flex-col gap-2">
           <Button
             type="button"
             onClick={state === "listening" ? stopListening : startListening}
-            disabled={disabled}
+            disabled={disabled || busy}
             aria-label={state === "listening" ? "Stop recording" : "Start voice input"}
             className={cn(
               "w-full text-base font-semibold transition-all",
@@ -154,8 +285,14 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
                 : "bg-blue-600/70 hover:bg-blue-600 border border-blue-400/50 text-white"
             )}
           >
-            {state === "listening" ? "🎙 Stop" : "🎤 Speak"}
+            {buttonLabel}
           </Button>
+
+          {state === "listening" && useRecording && (
+            <p className="text-white/40 text-xs mt-1 mb-0 text-center">
+              Listening — pauses briefly, then sends automatically.
+            </p>
+          )}
 
           {interimText && (
             <p className="italic text-white/50 text-sm mt-1 mb-0">
@@ -170,7 +307,7 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
           htmlFor="workout-text-input"
           className="text-white/70 text-sm font-medium"
         >
-          {label ?? (speechSupported ? "Or type your workout:" : "Describe your workout:")}
+          {label ?? (micAvailable ? "Or type your workout:" : "Describe your workout:")}
         </label>
         <div className="flex gap-2">
           <Input
