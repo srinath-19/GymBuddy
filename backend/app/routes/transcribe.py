@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import defaultdict
 
@@ -22,7 +23,11 @@ _client = openai.AsyncOpenAI()
 # transcripts and ignore `continuous`. Recording audio and transcribing it here
 # makes mobile behave identically to desktop, and handles gym background noise
 # far better than the on-device models do.
-_MODEL = "gpt-4o-transcribe"
+# Overridable so a newer model can be tried without a code change. OpenAI now
+# lists `gpt-transcribe` as its recommended default; this stays on the model that
+# is already deployed and proven here, since the two differ in which context
+# parameters they accept.
+_MODEL = os.environ.get("TRANSCRIBE_MODEL", "gpt-4o-transcribe").strip() or "gpt-4o-transcribe"
 
 # OpenAI rejects audio uploads above 25 MB; a spoken workout is a few hundred KB,
 # so anything near the ceiling is a client bug or abuse.
@@ -93,14 +98,8 @@ def _resolve_extension(content_type: str | None, filename: str | None) -> str:
     return "webm"
 
 
-@router.post("/transcribe")
-async def transcribe(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
-) -> JSONResponse:
-    """Transcribe an uploaded audio clip to text via OpenAI."""
-    _check_rate_limit(current_user["sub"])
-
+async def read_audio_upload(file: UploadFile) -> bytes:
+    """Read and validate an uploaded audio clip. Raises HTTPException if unusable."""
     audio = await file.read()
     if not audio:
         raise HTTPException(
@@ -112,13 +111,24 @@ async def transcribe(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Audio file too large (max 25 MB).",
         )
+    return audio
 
-    ext = _resolve_extension(file.content_type, file.filename)
+
+async def transcribe_audio(
+    audio: bytes,
+    content_type: str | None,
+    filename: str | None,
+) -> str:
+    """Transcribe raw audio bytes to text. Raises HTTPException on upstream failure.
+
+    Shared by /transcribe and the single-request audio path on /workouts/stream/audio.
+    """
+    ext = _resolve_extension(content_type, filename)
 
     try:
         result = await _client.audio.transcriptions.create(
             model=_MODEL,
-            file=(f"audio.{ext}", audio, file.content_type or f"audio/{ext}"),
+            file=(f"audio.{ext}", audio, content_type or f"audio/{ext}"),
             prompt=_PROMPT,
             language="en",
             response_format="text",
@@ -131,6 +141,18 @@ async def transcribe(
         ) from exc
 
     # response_format="text" yields a bare string rather than a model object.
-    text = (result if isinstance(result, str) else getattr(result, "text", "")).strip()
+    return (result if isinstance(result, str) else getattr(result, "text", "")).strip()
+
+
+@router.post("/transcribe")
+async def transcribe(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> JSONResponse:
+    """Transcribe an uploaded audio clip to text via OpenAI."""
+    _check_rate_limit(current_user["sub"])
+
+    audio = await read_audio_upload(file)
+    text = await transcribe_audio(audio, file.content_type, file.filename)
 
     return JSONResponse({"success": True, "data": {"text": text}, "error": None})

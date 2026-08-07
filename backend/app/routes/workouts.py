@@ -7,12 +7,22 @@ import uuid
 from datetime import date as Date, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from ..agents.workout_parser import run_agent, run_agent_streamed
 from ..auth.dependencies import get_current_user
+from .transcribe import read_audio_upload, transcribe_audio
 from .tts import generate_tts_b64
 from ..cache.redis_client import (
     get_cached_sessions,
@@ -165,15 +175,11 @@ async def create_workout(
 # POST /workouts/stream  — AI-agent path with SSE-style progress events
 # ---------------------------------------------------------------------------
 
-@router.post("/workouts/stream")
-async def create_workout_stream(
-    body: WorkoutRequest,
-    current_user: dict = Depends(get_current_user),
-) -> StreamingResponse:
-    user_id = UUID(current_user["sub"])
+def _agent_event_stream(transcript: str, user_id: UUID, client_tz: str):
+    """NDJSON event stream for one agent run. Shared by the text and audio routes."""
 
     async def event_generator():
-        async for event in run_agent_streamed(body.transcript, user_id, client_tz=body.client_tz or "UTC"):
+        async for event in run_agent_streamed(transcript, user_id, client_tz=client_tz):
             if event["type"] == "done":
                 cache_dirty = event.pop("cache_dirty", False)
                 msg = event["message"]
@@ -198,6 +204,61 @@ async def create_workout_stream(
                 yield json.dumps({"type": "done", "data": action_data.model_dump(mode="json")}) + "\n"
             else:
                 yield json.dumps(event) + "\n"
+
+    return event_generator
+
+
+@router.post("/workouts/stream")
+async def create_workout_stream(
+    body: WorkoutRequest,
+    current_user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    user_id = UUID(current_user["sub"])
+    generator = _agent_event_stream(body.transcript, user_id, body.client_tz or "UTC")
+    return StreamingResponse(generator(), media_type="application/x-ndjson")
+
+
+# ---------------------------------------------------------------------------
+# POST /workouts/stream/audio  — same agent path, but starting from raw audio
+#
+# Phones cannot use the browser Web Speech API, so they record a clip instead.
+# Transcribing it here rather than through a separate /transcribe call keeps the
+# whole interaction to a single request: the audio uploads once, and the agent
+# runs on the same connection. Going via /transcribe first would upload the
+# audio, return text, and then send that text back up — an extra mobile network
+# round-trip before any work starts.
+# ---------------------------------------------------------------------------
+
+@router.post("/workouts/stream/audio")
+async def create_workout_stream_from_audio(
+    file: UploadFile = File(...),
+    client_tz: str = Form(default="UTC"),
+    current_user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    user_id = UUID(current_user["sub"])
+    audio = await read_audio_upload(file)
+
+    async def event_generator():
+        yield json.dumps({"type": "progress", "message": "Transcribing your voice..."}) + "\n"
+
+        try:
+            transcript = (await transcribe_audio(audio, file.content_type, file.filename)).strip()
+        except HTTPException as exc:
+            yield json.dumps({"type": "error", "message": exc.detail}) + "\n"
+            return
+
+        # A silent or unintelligible clip must not reach the agent — the text route
+        # gets this guard from WorkoutRequest's min_length, which multipart bypasses.
+        if len(transcript) < 3:
+            yield json.dumps({"type": "error", "message": "Didn't catch that — try again."}) + "\n"
+            return
+
+        # Echo the transcript so the UI can show what was heard before the agent
+        # finishes, which is the feedback the Web Speech path gives for free.
+        yield json.dumps({"type": "transcript", "message": transcript}) + "\n"
+
+        async for chunk in _agent_event_stream(transcript, user_id, client_tz)():
+            yield chunk
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 

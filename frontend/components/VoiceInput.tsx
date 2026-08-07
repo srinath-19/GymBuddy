@@ -23,6 +23,14 @@ import { cn } from "@/lib/utils";
 
 interface VoiceInputProps {
   onTranscript: (text: string) => void;
+  /**
+   * Optional single-request path for recorded audio. When supplied, a mobile
+   * recording is handed over as-is for the caller to upload and transcribe in one
+   * call, instead of being transcribed here and passed to `onTranscript` — which
+   * costs an extra round-trip. Callers without an audio-capable endpoint simply
+   * omit this and get the two-step behaviour.
+   */
+  onAudio?: (audio: Blob, filename: string) => Promise<void>;
   disabled?: boolean;
   label?: string;
   placeholder?: string;
@@ -47,10 +55,11 @@ const MIN_AUDIO_BYTES = 1200;
 
 const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceInput({
   onTranscript,
+  onAudio,
   disabled = false,
   label,
-  placeholder = "e.g. bench press 3x10 at 135 lbs",
-  submitLabel = "Log",
+  placeholder = "e.g. bench press 3x10, or what did I do today?",
+  submitLabel = "Send",
   onListenStart,
   onListenEnd,
 }, ref) {
@@ -102,6 +111,14 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
       // The blob carries the container the recorder actually chose, which is the
       // authoritative value — on iOS it will be mp4 rather than the webm default.
       const filename = `speech.${extensionForMimeType(blob.type || recorder.mimeType)}`;
+
+      if (onAudio) {
+        // Single-request path: the caller uploads the clip and transcribes it
+        // server-side as part of the same call.
+        await onAudio(blob, filename);
+        return;
+      }
+
       const text = await transcribeAudio(blob, filename);
       if (text) {
         onTranscript(text);
@@ -115,7 +132,7 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
       setState("idle");
       onListenEnd?.();
     }
-  }, [recorder, onTranscript, onListenEnd]);
+  }, [recorder, onAudio, onTranscript, onListenEnd]);
 
   useEffect(() => {
     finishRecordingRef.current = () => void finishRecording();
@@ -307,7 +324,7 @@ const VoiceInput = forwardRef<VoiceInputHandle, VoiceInputProps>(function VoiceI
           htmlFor="workout-text-input"
           className="text-white/70 text-sm font-medium"
         >
-          {label ?? (micAvailable ? "Or type your workout:" : "Describe your workout:")}
+          {label ?? (micAvailable ? "Or type a message:" : "Type a message:")}
         </label>
         <div className="flex gap-2">
           <Input

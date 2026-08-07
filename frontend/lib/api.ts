@@ -230,27 +230,19 @@ export async function logWorkout(
 
 type WorkoutStreamEvent =
   | { type: "progress"; message: string }
+  | { type: "transcript"; message: string }
   | { type: "done"; data: AgentActionResponse }
   | { type: "error"; message: string };
 
-export async function logWorkoutStreamed(
-  transcript: string,
+/** Consumes an NDJSON agent stream, forwarding progress until the result arrives. */
+async function readAgentStream(
+  response: Response,
   onProgress: (message: string) => void,
+  onTranscript?: (text: string) => void,
 ): Promise<AgentActionResponse> {
-  const token = await getToken();
-
-  const response = await fetch(`${getApiBaseUrl()}/api/v1/workouts/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ transcript, client_tz: clientTz() }),
-  });
-
   if (!response.ok) {
-    const err = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(err?.error ?? `HTTP ${response.status}`);
+    const err = await response.json().catch(() => ({})) as { error?: string; detail?: string };
+    throw new Error(err?.error ?? err?.detail ?? `HTTP ${response.status}`);
   }
 
   const reader = response.body!.getReader();
@@ -269,6 +261,8 @@ export async function logWorkoutStreamed(
       const event = JSON.parse(line) as WorkoutStreamEvent;
       if (event.type === "progress") {
         onProgress(event.message);
+      } else if (event.type === "transcript") {
+        onTranscript?.(event.message);
       } else if (event.type === "done") {
         finalResult = event.data;
       } else if (event.type === "error") {
@@ -279,6 +273,53 @@ export async function logWorkoutStreamed(
 
   if (!finalResult) throw new Error("Stream ended without a result");
   return finalResult;
+}
+
+export async function logWorkoutStreamed(
+  transcript: string,
+  onProgress: (message: string) => void,
+): Promise<AgentActionResponse> {
+  const token = await getToken();
+
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/workouts/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ transcript, client_tz: clientTz() }),
+  });
+
+  return readAgentStream(response, onProgress);
+}
+
+/**
+ * Logs a workout straight from recorded audio, in a single request.
+ *
+ * The backend transcribes and then runs the agent on the same connection, so the
+ * clip is uploaded once. Transcribing via `transcribeAudio` first would cost an
+ * extra mobile round-trip before the agent even starts.
+ */
+export async function logWorkoutFromAudioStreamed(
+  audio: Blob,
+  filename: string,
+  onProgress: (message: string) => void,
+  onTranscript?: (text: string) => void,
+): Promise<AgentActionResponse> {
+  const token = await getToken();
+
+  const form = new FormData();
+  form.append("file", audio, filename);
+  form.append("client_tz", clientTz());
+
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/workouts/stream/audio`, {
+    method: "POST",
+    // Content-Type is deliberately unset so the browser adds the multipart boundary.
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  return readAgentStream(response, onProgress, onTranscript);
 }
 
 export async function getWorkouts(limit = 50): Promise<WorkoutLogResponse[]> {

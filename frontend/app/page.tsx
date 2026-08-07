@@ -14,6 +14,7 @@ import {
   getRequiredMuscles,
   getSessions,
   getWorkouts,
+  logWorkoutFromAudioStreamed,
   logWorkoutStreamed,
   ManualWorkoutRequest,
   updateSession,
@@ -469,6 +470,42 @@ export default function HomePage() {
     handleTranscriptRef.current = handleTranscript;
   }, [handleTranscript]);
 
+  /**
+   * Mobile voice path. The clip goes straight to the agent endpoint, which
+   * transcribes and runs the agent on one connection — uploading the audio and
+   * then sending the resulting text back up would cost an extra round-trip.
+   */
+  const handleAudio = useCallback(
+    async (audio: Blob, filename: string) => {
+      setUiState("submitting");
+      setErrorMessage(null);
+      setLastAction(null);
+      setStreamMessage("Transcribing your voice...");
+      try {
+        const result = await logWorkoutFromAudioStreamed(
+          audio,
+          filename,
+          (msg) => setStreamMessage(msg),
+          (heard) => setStreamMessage(`"${heard}"`),
+        );
+        setLastAction(result);
+        setUiState("idle");
+        setStreamMessage("");
+        if (result.tts_audio_b64) {
+          tts.speakFromBase64(result.tts_audio_b64);
+        } else if (result.message) {
+          tts.speak(result.message);
+        }
+        await loadWorkouts();
+      } catch (err) {
+        setUiState("error");
+        setStreamMessage("");
+        setErrorMessage(err instanceof Error ? err.message : "Something went wrong.");
+      }
+    },
+    [loadWorkouts, tts]
+  );
+
   const handleDelete = useCallback(
     async (id: string) => {
       setCrudError(null);
@@ -643,6 +680,7 @@ export default function HomePage() {
       <section aria-label="Log a workout" className="glass p-5 mb-8">
         <VoiceInput
           onTranscript={handleTranscript}
+          onAudio={handleAudio}
           disabled={uiState === "submitting"}
           onListenStart={wakeWord.pause}
           onListenEnd={wakeWord.resume}
