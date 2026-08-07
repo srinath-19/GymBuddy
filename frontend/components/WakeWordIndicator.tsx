@@ -9,6 +9,8 @@ interface WakeWordIndicatorProps {
   interimText: string;
   supported: boolean;
   isSpeaking: boolean;
+  /** Set when listening stopped for a reason the user has to fix (e.g. mic blocked). */
+  error?: string | null;
 }
 
 export default function WakeWordIndicator({
@@ -17,11 +19,21 @@ export default function WakeWordIndicator({
   interimText,
   supported,
   isSpeaking,
+  error = null,
 }: WakeWordIndicatorProps) {
   if (!supported) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-[999] flex flex-col items-end gap-2 pointer-events-none">
+      {error && (
+        <div
+          role="alert"
+          className="glass max-w-[280px] px-3 py-2 text-red-300 text-xs leading-snug animate-fadeIn"
+        >
+          {error}
+        </div>
+      )}
+
       {isActivated && interimText && (
         <div className="glass max-w-[280px] px-3 py-2 text-white text-xs leading-snug animate-fadeIn">
           {interimText}

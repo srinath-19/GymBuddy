@@ -8,6 +8,7 @@ import WakeWordIndicator from "@/components/WakeWordIndicator";
 import {
   addWorkoutManually,
   AgentActionResponse,
+  clientTz,
   deleteWorkout,
   getExpectedMuscles,
   getRequiredMuscles,
@@ -45,11 +46,18 @@ type DayGroup = {
   workouts: WorkoutLogResponse[];
 };
 
+/**
+ * Local calendar date as "YYYY-MM-DD". Never use toISOString().slice(0, 10) for
+ * this — that yields the *UTC* date, which is a day off for much of the day.
+ */
+function toLocalDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function groupByDay(workouts: WorkoutLogResponse[], sessions: WorkoutSession[]): DayGroup[] {
   const map = new Map<string, WorkoutLogResponse[]>();
   for (const w of workouts) {
-    const _ld = new Date(w.logged_at);
-    const key = `${_ld.getFullYear()}-${String(_ld.getMonth() + 1).padStart(2, "0")}-${String(_ld.getDate()).padStart(2, "0")}`;
+    const key = toLocalDateKey(new Date(w.logged_at));
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(w);
   }
@@ -79,15 +87,13 @@ function getWeekBounds(offset: number): { start: string; end: string; label: str
   mon.setHours(0, 0, 0, 0);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  const toISO = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const label =
     offset === 0
       ? "This week"
       : mon.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
         " – " +
         sun.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return { start: toISO(mon), end: toISO(sun), label };
+  return { start: toLocalDateKey(mon), end: toLocalDateKey(sun), label };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +256,7 @@ interface WorkoutFormValues {
 function blankForm(exercise = "", date?: string): WorkoutFormValues {
   return {
     exercise, sets: "", reps: "", weight: "", weight_unit: "lbs", notes: "",
-    date: date ?? new Date().toISOString().slice(0, 10),
+    date: date ?? toLocalDateKey(new Date()),
   };
 }
 
@@ -262,7 +268,7 @@ function fromWorkout(w: WorkoutLogResponse): WorkoutFormValues {
     weight: String(w.weight),
     weight_unit: w.weight_unit as "lbs" | "kg",
     notes: w.notes ?? "",
-    date: w.logged_at.slice(0, 10),
+    date: toLocalDateKey(new Date(w.logged_at)),
   };
 }
 
@@ -528,7 +534,11 @@ export default function HomePage() {
       setManualSaving(true);
 
       const tempId = `pending-${Date.now()}`;
-      const optimisticDate = values.date ? `${values.date}T00:00:00.000Z` : new Date().toISOString();
+      // Local noon, matching the backend's anchor, so the optimistic row lands in
+      // the same day group the server will confirm it into.
+      const optimisticDate = values.date
+        ? new Date(`${values.date}T12:00:00`).toISOString()
+        : new Date().toISOString();
       const optimistic: WorkoutLogResponse = {
         id: tempId,
         user_id: null,
@@ -553,6 +563,7 @@ export default function HomePage() {
         weight_unit: values.weight_unit,
         notes: values.notes.trim() || undefined,
         logged_at: values.date || undefined,
+        client_tz: clientTz(),
       };
       try {
         await addWorkoutManually(payload);
@@ -900,6 +911,7 @@ export default function HomePage() {
         isActivated={wakeWord.isActivated}
         interimText={wakeWord.interimText}
         supported={wakeWord.supported}
+        error={wakeWord.error}
         isSpeaking={tts.isSpeaking}
       />
     </main>

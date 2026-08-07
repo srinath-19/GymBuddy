@@ -4,8 +4,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from datetime import date as Date, timezone, datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import date as Date, datetime
 
 from agents import Agent, RunContextWrapper, Runner, function_tool
 
@@ -34,6 +33,7 @@ from ..db.queries import (
     upsert_session,
 )
 from ..models.workout import WorkoutLog, WorkoutLogResponse, WorkoutSession
+from ..utils.dates import anchor_local_date, local_date_of, local_today, safe_tz
 
 AGENT_TIMEOUT_SECONDS = 60
 
@@ -55,33 +55,6 @@ class GymContext:
     cache_dirty: bool = False
     # IANA timezone from the client (e.g. "America/Denver") — used for date calculations
     client_tz: str = "UTC"
-
-
-def _local_today(tz_name: str) -> Date:
-    try:
-        return datetime.now(ZoneInfo(tz_name)).date()
-    except (ZoneInfoNotFoundError, KeyError):
-        return datetime.now(timezone.utc).date()
-
-
-def _safe_tz(tz_name: str | None) -> str:
-    """Return tz_name if valid IANA timezone, else 'UTC'."""
-    if not tz_name:
-        return "UTC"
-    try:
-        ZoneInfo(tz_name)
-        return tz_name
-    except (ZoneInfoNotFoundError, KeyError):
-        return "UTC"
-
-
-def _logged_at_local_date(logged_at_str: str, tz_name: str) -> str:
-    """Convert a serialized logged_at ISO string to the local calendar date (YYYY-MM-DD)."""
-    try:
-        dt = datetime.fromisoformat(logged_at_str)
-        return dt.astimezone(ZoneInfo(tz_name)).date().isoformat()
-    except Exception:
-        return logged_at_str[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +91,7 @@ async def log_workout(
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
-            logged_at_dt = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
+            logged_at_dt = anchor_local_date(target_date, ctx.context.client_tz)
         except ValueError:
             return f"Invalid date format: {date_str}. Use YYYY-MM-DD."
 
@@ -318,7 +291,7 @@ async def start_workout_session(
         notes: Optional extra context the user mentioned about their plan.
         date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
     """
-    today = datetime.now(timezone.utc).date()
+    today = local_today(ctx.context.client_tz)
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
@@ -356,7 +329,7 @@ async def get_session_for_date_tool(
     Args:
         date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
     """
-    today = datetime.now(timezone.utc).date()
+    today = local_today(ctx.context.client_tz)
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
@@ -411,7 +384,7 @@ async def get_today_workouts(
     Args:
         date_str: ISO date "YYYY-MM-DD" to look up. Omit (or pass null) for today.
     """
-    today = _local_today(ctx.context.client_tz)
+    today = local_today(ctx.context.client_tz)
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
@@ -431,7 +404,7 @@ async def get_today_workouts(
             workouts = [
                 WorkoutLogResponse.model_validate(w)
                 for w in cached_workouts
-                if _logged_at_local_date(w.get("logged_at", ""), ctx.context.client_tz) == date_key
+                if local_date_of(w.get("logged_at", ""), ctx.context.client_tz) == date_key
             ]
             hit = next((s for s in cached_sessions if s.get("date") == date_key), None)
             today_session = WorkoutSession.model_validate(hit) if hit else None
@@ -497,7 +470,7 @@ async def delete_exercise_today(
         exercise: Exercise name or partial name to match (e.g. "bench press", "squat").
         date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
     """
-    today = _local_today(ctx.context.client_tz)
+    today = local_today(ctx.context.client_tz)
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
@@ -535,7 +508,7 @@ async def get_workouts_for_date(
     Args:
         date_str: ISO date "YYYY-MM-DD". Defaults to today if omitted.
     """
-    today = datetime.now(timezone.utc).date()
+    today = local_today(ctx.context.client_tz)
     if date_str:
         try:
             target_date = Date.fromisoformat(date_str)
@@ -554,13 +527,15 @@ async def get_workouts_for_date(
             workouts = [
                 WorkoutLogResponse.model_validate(w)
                 for w in cached
-                if w.get("logged_at", "")[:10] == date_key
+                if local_date_of(w.get("logged_at", ""), ctx.context.client_tz) == date_key
             ]
             used_cache = True
 
     if not used_cache or not workouts:
         async with get_session() as db:
-            workouts = await fetch_workouts_by_date(db, ctx.context.user_id, target_date)
+            workouts = await fetch_workouts_by_date(
+                db, ctx.context.user_id, target_date, tz=ctx.context.client_tz
+            )
 
     label = "today" if target_date == today else date_key
     if not workouts:
@@ -784,9 +759,9 @@ async def run_agent_streamed(
     user_id: uuid.UUID,
     client_tz: str = "UTC",
 ) -> AsyncGenerator[dict, None]:
-    tz = _safe_tz(client_tz)
+    tz = safe_tz(client_tz)
     context = GymContext(user_id=user_id, client_tz=tz)
-    today_iso = _local_today(tz).isoformat()
+    today_iso = local_today(tz).isoformat()
     dated_transcript = f"[Today is {today_iso}]\n{transcript}"
 
     result = Runner.run_streamed(_agent, input=dated_transcript, context=context)
@@ -827,9 +802,9 @@ async def run_agent(transcript: str, user_id: uuid.UUID, client_tz: str = "UTC")
     Returns (context, final_message) — the context holds structured result data,
     the message is a human-readable summary of what happened.
     """
-    tz = _safe_tz(client_tz)
+    tz = safe_tz(client_tz)
     context = GymContext(user_id=user_id, client_tz=tz)
-    today_iso = _local_today(tz).isoformat()
+    today_iso = local_today(tz).isoformat()
     dated_transcript = f"[Today is {today_iso}]\n{transcript}"
 
     result = await asyncio.wait_for(

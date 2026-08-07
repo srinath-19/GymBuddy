@@ -477,6 +477,7 @@ export default function CoachPage() {
         isActivated={wakeWord.isActivated}
         interimText={wakeWord.interimText}
         supported={wakeWord.supported}
+        error={wakeWord.error}
         isSpeaking={tts.isSpeaking}
       />
     </main>

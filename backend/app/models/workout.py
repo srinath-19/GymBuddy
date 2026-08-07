@@ -76,7 +76,11 @@ class ManualWorkoutRequest(BaseModel):
     weight: float = Field(ge=0.0)
     weight_unit: Literal["lbs", "kg"] = "lbs"
     notes: str | None = None
-    logged_at: Date | None = None  # "YYYY-MM-DD"; defaults to today on backend if omitted
+    logged_at: Date | None = None  # "YYYY-MM-DD"; defaults to now on backend if omitted
+    client_tz: str | None = Field(
+        default=None,
+        description="IANA timezone name from the client — anchors logged_at to the user's calendar day",
+    )
 
 
 class WorkoutUpdateRequest(BaseModel):
