@@ -14,8 +14,13 @@ dependencies = [
     "pydantic-settings>=2.5.0",
     "python-dotenv>=1.0.1",
     "pyjwt[crypto]>=2.12.1",
+    # Required by FastAPI to parse multipart uploads (/api/v1/transcribe).
+    "python-multipart>=0.0.20",
     "google-api-python-client>=2.0.0",
     "upstash-redis>=1.1.0",
+    # zoneinfo has no bundled tz database on Windows, and Linux images are not
+    # guaranteed to ship one either — required for all client-timezone handling.
+    "tzdata>=2025.1",
 ]
 
 [dependency-groups]
